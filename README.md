@@ -1,2 +1,2 @@
 # SQUASH
-Repository for SQUASH.
+Full readme pending.
