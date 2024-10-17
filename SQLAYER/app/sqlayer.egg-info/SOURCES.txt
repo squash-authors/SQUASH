@@ -1,0 +1,16 @@
+LICENSE
+README.md
+setup.py
+app/sqlayer/__init__.py
+app/sqlayer.egg-info/PKG-INFO
+app/sqlayer.egg-info/SOURCES.txt
+app/sqlayer.egg-info/dependency_links.txt
+app/sqlayer.egg-info/requires.txt
+app/sqlayer.egg-info/top_level.txt
+app/sqlayer/src/__init__.py
+app/sqlayer/src/coordinator.py
+app/sqlayer/src/datamanager.py
+app/sqlayer/src/globals_qa.py
+app/sqlayer/src/globals_qp.py
+app/sqlayer/src/queryallocator.py
+app/sqlayer/src/queryprocessor.py

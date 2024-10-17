@@ -1,0 +1,18 @@
+{
+    "mode": "B",
+    "word_size": "4",
+    "big_endian": false,
+    "bit_budget": "512",
+    "attribute_bit_budget": "32",
+    "non_uniform_bit_alloc": true,
+    "design_boundaries": true,
+    "partitions_root": "partitions",
+    "path": "datasets/sift1m/",
+    "fname": "sift1m",
+    "num_partitions": "5",
+    "partitioner_blocks": "10",
+    "num_vectors": "1000000",
+    "num_dimensions": "128",
+    "num_attributes": "4",
+    "num_blocks": "1"
+}
