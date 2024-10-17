@@ -1,0 +1,2 @@
+# SQUASH
+Repository for SQUASH.
