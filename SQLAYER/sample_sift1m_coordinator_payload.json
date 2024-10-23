@@ -1,0 +1,42 @@
+{
+    "dmg_params": {
+        "exp_tag": "sift1m_p10_a84",
+        "exp_run": "0",
+        "path": "/mnt/squash/datasets/sift1m",
+        "fname": "sift1m",
+        "mode": "A",
+        "query_k": "10",
+        "query_batchsize": "50",
+        "query_fname": null,
+        "num_vectors": "1000000",
+        "num_dimensions": "128",
+        "num_attributes": "4",
+        "num_blocks": "1",
+        "word_size": "4",
+        "big_endian": false,
+        "bit_budget": "512",
+        "attribute_bit_budget": "32",
+        "precision": "approx_bqlb",
+        "inmem_vaqdata": "inmem_columnar",
+        "adc_or_sdc": "adc",
+        "bq_cutoff_perc": "10",
+        "check_recall": true,
+        "num_allocators": "84",
+        "allocators_root": "allocators",
+        "allocator_id": "0",
+        "fine_tune": true,
+        "centroid_factor": "1.15",
+        "k_factor": "2",
+        "vecs_to_print": [5911,31,7177,7177],
+        "bfr": "4",
+        "l_max": "3",
+        "level": "0",
+        "caching": false,
+        "use_s3": true,
+        "s3_bucket": "squash-data-bucket"
+    },
+    "qa_params": {
+        "num_partitions": "10",
+        "partitions_root": "partitions"
+    }
+}
