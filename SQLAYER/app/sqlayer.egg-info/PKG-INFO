@@ -14,6 +14,7 @@ Description-Content-Type: text/markdown
 License-File: LICENSE
 Requires-Dist: numpy>=2.0.0
 Requires-Dist: boto3>=1.34.82
+Requires-Dist: bitarray==2.5.1
 
 # SQLayer
 A package containing Python classes for SQUASH serverless KNN searches. Intended for use as a Lambda Layer in conjunction with Lambda functions.
