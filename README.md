@@ -17,6 +17,11 @@ This repository contains 3 packages:
     - http://corpus-texmex.irisa.fr
     - https://www.cse.cuhk.edu.hk/systems/hash/gqr/datasets.html
 
+## Experimental Results  
+Performance       |  Cost-to-Performance Balance
+:-------------------------:|:-------------------------:
+![perf-graph](SQUASH_BUILD/Images/performance_2x2_plot_system-x.jpg)  |  ![cost-perf-graph](SQUASH_BUILD/Images/latency_and_cost_2x2_plot_with_system-x.jpg)
+
 ***
 # SQUASH_BUILD
 
