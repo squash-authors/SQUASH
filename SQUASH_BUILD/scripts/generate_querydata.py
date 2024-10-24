@@ -466,15 +466,6 @@ def create_query_subsets(path, fname, num_allocators, allocators_root, dup_facto
 #----------------------------------------------------------------------------------------------------------------------------------------  
 def main():
 
-    # path = Path('SQUASH_BUILD/datasets/histo64i64_12103/')    
-    # fname = 'histo64i64_12103_swapped'
-    # num_vectors = 12103
-    # num_dimensions = 64
-    # num_attributes = 4    
-    # num_blocks = 7 
-    # num_samples = 12
-    # attr_selectivity_perc = 8
-
     # path = Path('SQUASH_BUILD/datasets/siftsmall/')
     # fname = 'siftsmall'    
     # num_vectors = 10000
