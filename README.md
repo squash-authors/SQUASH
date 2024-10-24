@@ -1,5 +1,9 @@
 # SQUASH
-This is a repository for SQUASH: Serverless Quantization-based Unified Attributed Similarity Search at High Dimensionality.
+This is a repository for SQUASH: Serverless Quantization-based Unified Attributed Similarity Search at High Dimensionality. SQUASH is the first fully serverless vector database with support for hybrid queries. It features a novel unified quantization-based approach for attributes and vectors, and achieves significantly higher performance than alternative vector search solutions at lower cost.
+
+## SQUASH Architecture
+
+![arch_diagram](SQUASH_BUILD/Images/arch6_cropped.pdf)
 
 ## Key Components
 - SQUASH_BUILD: Index construction module. Performs Constrained K Means clustering, before building scalar quantization-based indices in parallel for all partitions.
