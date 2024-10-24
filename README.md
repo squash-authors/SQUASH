@@ -8,9 +8,9 @@ This is a repository for SQUASH: Serverless Quantization-based Unified Attribute
 ## Repository Overview
 This repository contains 3 packages:
 
-- SQUASH_BUILD: Index construction module. Performs Constrained K Means clustering, before building scalar quantization-based indices in parallel for all partitions.
-- SQLAYER: Used to construct the SQUASH Lambda layer, which is imported into each Lambda application used by the system. Contains code for coordinators, query allocators and query processors.
-- SQUASH_MP: Alternative SQUASH implementation, developed for non-FaaS execution. Does not utilize Lambda layers, and spawns additional processes for query allocators/processors rather than invoking Lambda functions.
+- **SQUASH_BUILD**: Index construction module. Performs Constrained K Means clustering, before building scalar quantization-based indices in parallel for all partitions.
+- **SQLAYER**: Used to construct the SQUASH Lambda layer, which is imported into each Lambda application used by the system. Contains code for coordinators, query allocators and query processors.
+- **SQUASH_MP**: Alternative SQUASH implementation, developed for non-FaaS execution. Does not utilize Lambda layers, and spawns additional processes for query allocators/processors rather than invoking Lambda functions.
 
 ## Datasets
 - The datatsets we evaluate SQUASH against are SIFT1M, GIST1M, SIFT10M and DEEP10M. They can be downloaded from the following sources:
