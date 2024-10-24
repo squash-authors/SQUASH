@@ -1,19 +1,19 @@
-# SQUASH Repository
+# SQUASH
 This is a repository for SQUASH: Serverless Quantization-based Unified Attributed Similarity Search at High Dimensionality.
 
-# Key Components
+## Key Components
 - SQUASH_BUILD: Index construction module. Performs Constrained K Means clustering, before building scalar quantization-based indices in parallel for all partitions.
 - SQLAYER: Used to construct the SQUASH Lambda layer, which is imported into each Lambda application used by the system. Contains code for coordinators, query allocators and query processors.
 - SQUASH_MP: Alternative SQUASH implementation, developed for non-FaaS execution. Does not utilize Lambda layers, and spawns additional processes for query allocators/processors rather than invoking Lambda functions.
 
-# Prerequisites
+## Prerequisites
 To run SQUASH, you will require:
 - An AWS account
 - The AWS CLI to be installed (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html). 
 - The AWS CLI must be configured to connect to your AWS account (https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-quickstart.html)
 - Access to the AWS SDK Boto3 for Python - automatically included if using AWS Cloud9 (Cloud-based IDE)
 
-# Datasets
+## Datasets
 - The datatsets we evaluate SQUASH against are SIFT1M, GIST1M, SIFT10M and DEEP10M. They can be downloaded from the following sources:
     - http://corpus-texmex.irisa.fr
     - https://www.cse.cuhk.edu.hk/systems/hash/gqr/datasets.html
@@ -172,7 +172,7 @@ This is the "multiprocessing" version of the SQUASH run-time (i.e. query-time) s
     - treelauncher.py: TreeLauncher class, used by Coordinator and QueryProcessor to manage Lambda tree
 
 - Driver script (free-standing):
-    - smp_runner: This script enables configuration of runtime paramaters and launch of a query session
+    - smp_runner: This script enables configuration of runtime parameters and launch of a query session
 
 ## Instructions
 Before running this code, SQUASH_BUILD must have been used to build the required SQUASH indexes and support files. The relevant folder should then be copied from SQUASH_BUILD/datasets into SQUASH_MP/datasets.  
