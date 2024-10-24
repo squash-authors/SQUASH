@@ -19,18 +19,6 @@ num_attributes  = 4
 # path            = Path('SQUASH_BUILD/datasets/gist1m/')
 # fname           = 'gist1m'
 
-# num_vectors     = 1000000
-# path            = Path('SQUASH_BUILD/datasets/word2vec/')
-# fname           = 'word2vec'
-
-# num_vectors     = 2340373
-# path            = Path('SQUASH_BUILD/datasets/imagenet/')
-# fname           = 'imagenet'
-
-# num_vectors     = 2196017
-# path            = Path('SQUASH_BUILD/datasets/glove/')
-# fname           = 'glove'
-
 num_vectors     = 10000000
 path            = Path('SQUASH_BUILD/datasets/deep10m/')
 fname           = 'deep10m'
