@@ -5,17 +5,12 @@ This is a repository for SQUASH: Serverless Quantization-based Unified Attribute
 
 ![arch_diagram](SQUASH_BUILD/Images/arch6_cropped_jpg.jpg)
 
-## Key Components
+## Repository Overview
+This repository contains 3 packages:
+
 - SQUASH_BUILD: Index construction module. Performs Constrained K Means clustering, before building scalar quantization-based indices in parallel for all partitions.
 - SQLAYER: Used to construct the SQUASH Lambda layer, which is imported into each Lambda application used by the system. Contains code for coordinators, query allocators and query processors.
 - SQUASH_MP: Alternative SQUASH implementation, developed for non-FaaS execution. Does not utilize Lambda layers, and spawns additional processes for query allocators/processors rather than invoking Lambda functions.
-
-## Prerequisites
-To run SQUASH, you will require:
-- An AWS account
-- The AWS CLI to be installed (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html). 
-- The AWS CLI must be configured to connect to your AWS account (https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-quickstart.html)
-- Access to the AWS SDK Boto3 for Python - automatically included if using AWS Cloud9 (Cloud-based IDE)
 
 ## Datasets
 - The datatsets we evaluate SQUASH against are SIFT1M, GIST1M, SIFT10M and DEEP10M. They can be downloaded from the following sources:
@@ -26,6 +21,7 @@ To run SQUASH, you will require:
 # SQUASH_BUILD
 
 ## Folder Structure
+```script
 - datasets: Used to store datasets and generated indices. One subfolder per dataset.
 - logs: Build logs are automatically written here, and we recommend that command line output is also redirected here.
 - output: Not used?
@@ -42,6 +38,7 @@ To run SQUASH, you will require:
 - runprvd.py: Used to print detailed information about a given vector ID.
 - sb_auto_runner.py: Runner script for use with auto_build.sh
 - sb_runner.py: Standard runner script, used for individual build jobs.
+```
 
 ## Instructions
 We recommend running the SQUASH_BUILD module on a moderately-sized server for improved efficiency. A range of instance types with different cost/performance profiles are available via AWS EC2 (https://aws.amazon.com/ec2/pricing/).
@@ -62,6 +59,13 @@ We recommend running the SQUASH_BUILD module on a moderately-sized server for im
     - Run dataset_transfer to upload the allocators/partitions directories for a given dataset, as well as qavars.npz, to squash_data_bucket/datasets/XX.
 ***
 # SQLAYER
+
+## Prerequisites
+To run SQUASH using SQLAYER, you will require:
+- An AWS account
+- The AWS CLI to be installed (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html). 
+- The AWS CLI must be configured to connect to your AWS account (https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-quickstart.html)
+- Access to the AWS SDK Boto3 for Python - automatically included if using AWS Cloud9 (Cloud-based IDE)
 
 ## Instructions - Creating Lambda Layer
 - We recommend the use of AWS Cloud9 (cloud-based IDE) for simplified deployment and configuration of AWS services. (https://aws.amazon.com/cloud9/)
@@ -163,6 +167,7 @@ We recommend running the SQUASH_BUILD module on a moderately-sized server for im
 This is the "multiprocessing" version of the SQUASH run-time (i.e. query-time) system. It can be executed on cloud-provisioned servers such as those provided by AWS EC2, local (on-premise) servers (physical or virtual) and even workstations/PCs, assuming they have sufficient processing capacity.
 
 ## Folder Structure
+```script
 - datasets: Used to store datasets and generated indices. One subfolder per dataset.
 - logs: Build logs are automatically written here, and we recommend that command line output is also redirected here.
 - output: General output area
@@ -174,9 +179,9 @@ This is the "multiprocessing" version of the SQUASH run-time (i.e. query-time) s
     - queryallocator.py: QueryAllocator class
     - queryprocessor.py: QueryProcessor class
     - treelauncher.py: TreeLauncher class, used by Coordinator and QueryProcessor to manage Lambda tree
-
 - Driver script (free-standing):
     - smp_runner: This script enables configuration of runtime parameters and launch of a query session
+```
 
 ## Instructions
 Before running this code, SQUASH_BUILD must have been used to build the required SQUASH indexes and support files. The relevant folder should then be copied from SQUASH_BUILD/datasets into SQUASH_MP/datasets.  
