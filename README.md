@@ -3,7 +3,7 @@ This is a repository for SQUASH: Serverless Quantization-based Unified Attribute
 
 ## SQUASH Architecture
 
-![arch_diagram](SQUASH_BUILD/Images/arch6_cropped.pdf)
+![arch_diagram](SQUASH_BUILD/Images/arch6_cropped_jpg.jpg)
 
 ## Key Components
 - SQUASH_BUILD: Index construction module. Performs Constrained K Means clustering, before building scalar quantization-based indices in parallel for all partitions.
