@@ -46,6 +46,14 @@ Performance       |  Cost-to-Performance Balance
 ```
 
 ## Dependencies
+The following package versions were used for SQUASH_BUILD.
+```script
+- python==3.9
+- numpy==1.24.3
+- k_means_constrained==0.7.3
+- bitarray==2.5.1
+- boto3==1.34.82
+```
 
 ## Instructions
 We recommend running the SQUASH_BUILD module on a moderately-sized server for improved efficiency. A range of instance types with different cost/performance profiles are available via AWS EC2 (https://aws.amazon.com/ec2/pricing/).
@@ -103,22 +111,27 @@ To run SQUASH using SQLAYER, you will require:
 - Access to the AWS SDK Boto3 for Python - automatically included if using AWS Cloud9 (Cloud-based IDE)
 
 ## Dependencies
+The following package versions were used for SQLAYER.
+```script
+- python==3.11.9
+- numpy==2.0.0
+- boto3==1.34.148
+- botocore==1.34.148
+- s3transfer==0.10.2
+- setuptools==70.1.0
+- wheel==0.43.0
+```
 
 ## Instructions - Creating Lambda Layer
-- We recommend the use of AWS Cloud9 (cloud-based IDE) for simplified deployment and configuration of AWS services. (https://aws.amazon.com/cloud9/)
+- We recommend the use of AWS Cloud9 (cloud-based IDE  - https://aws.amazon.com/cloud9/) for simplified deployment and configuration of AWS services.
 - Within a Cloud9 environment (or alternative), create the following folder structure:
     - efs
     - packaging
         - sqlayer
         - publish_lambda_layer_version.sh
 - Copy the contents of the SQLAYER directory in this repository to the sqlayer directory listed above, and place publish_lambda_layer_version.sh accordingly.
-- Create a python virtual environment within the packaging directory, at the same level as sqlayer. We recommend naming it sqvenv. sqvenv should contain the following packages:
-    - boto3 >= 1.34.148
-    - botocore >= 1.34.148
-    - s3transfer >= 0.10.2
-    - setuptools >= 70.1.0
-    - wheel >= 0.43.0
-- Run publish_lambda_layer_version.sh to create the AWS Lambda layer
+- Create a python virtual environment within the packaging directory, at the same level as sqlayer. We recommend naming it sqvenv. sqvenv should contain the packages listed above.
+- Run publish_lambda_layer_version.sh to create the AWS Lambda layer.
 
 ## Instructions - Configuring other AWS services
 - Create an IAM role with the following policies:
@@ -221,7 +234,13 @@ This is the "multiprocessing" version of the SQUASH run-time (i.e. query-time) s
 ```
 
 ## Dependencies
-
+The following package versions were used for SQUASH_MP.
+```script
+- python==3.11.9
+- boto3==1.34.82
+- numpy==2.0.0
+- bitarray==2.5.1
+```
 
 ## Instructions
 Before running this code, SQUASH_BUILD must have been used to build the required SQUASH indexes and support files. The relevant folder should then be copied from SQUASH_BUILD/datasets into SQUASH_MP/datasets.  
