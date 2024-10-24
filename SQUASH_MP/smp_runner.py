@@ -134,14 +134,6 @@ def main():
     # Dataset-specific params
     #------------------------------
     
-    # path = Path('SQUASH_MP/datasets/histo64i64_12103/')
-    # fname = 'histo64i64_12103_swapped'
-    # num_vectors = 12103
-    # num_dimensions = 64
-    # num_attributes = 4
-    # # num_blocks = 7
-    # num_blocks = 1
-    
     # path = Path('SQUASH_MP/datasets/siftsmall/')
     # fname = 'siftsmall'
     # num_partitions = 4
@@ -151,13 +143,6 @@ def main():
     # # num_blocks = 10
     # num_blocks = 1
     # vecs_to_print = [5911,31,7177,7177]
-    
-    # path = Path('SQUASH_MP/datasets/ltest/')    
-    # fname = 'ltest'
-    # num_vectors = 50
-    # num_dimensions = 128
-    # num_attributes = 4    
-    # num_blocks = 1
 
     path = Path('SQUASH_MP/datasets/sift1m/')
     fname = 'sift1m'
@@ -175,24 +160,6 @@ def main():
     # num_attributes = 4
     # num_dimensions = 960
     # num_blocks = 1
-
-    # path = Path('SQUASH_MP/datasets/word2vec/')
-    # fname = 'word2vec'
-    # num_partitions = 10    
-    # num_vectors = 1000000
-    # num_attributes = 4
-    # num_dimensions = 300
-    # num_blocks = 1
-    # vecs_to_print = [401425, 989715, 135848, 602807, 879506]
-
-    # path = Path('SQUASH_MP/datasets/glove/')
-    # fname = 'glove'
-    # num_partitions = 10    
-    # num_vectors = 2196017
-    # num_attributes = 4
-    # num_dimensions = 300
-    # num_blocks = 1
-    # vecs_to_print = [1700,978184,1679904,100744,5805,82109,165737,21157,34825,1239036]
 
     # path = Path('SQUASH_MP/datasets/deep10m/')
     # fname = 'deep10m'
