@@ -40,6 +40,8 @@ This repository contains 3 packages:
 - sb_runner.py: Standard runner script, used for individual build jobs.
 ```
 
+## Dependencies
+
 ## Instructions
 We recommend running the SQUASH_BUILD module on a moderately-sized server for improved efficiency. A range of instance types with different cost/performance profiles are available via AWS EC2 (https://aws.amazon.com/ec2/pricing/).
 - Once a given dataset XX has been downloaded, place it in the SQUASH_BUILD/datasets/XX directory. Only the raw dataset (fvecs file) is required at this stage (e.g. sift1m, no extensions.)
@@ -60,12 +62,42 @@ We recommend running the SQUASH_BUILD module on a moderately-sized server for im
 ***
 # SQLAYER
 
+## Folder Structure
+```script
+- app
+    - sqlayer
+        - src
+            - __init__.py
+            - coordinator.py
+            - datamanager.py
+            - globals_qa.py
+            - globals_qp.py
+            - queryallocator.py
+            - queryprocessor.py
+            - sq_allocator_lambda_function.py
+            - sq_coordinator_lambda_function.py
+            - sq_processor_lambda_function.py
+            - treelauncher.py
+        - __init__.py
+    - README.md
+    - __init__.py
+- LICENSE
+- outline.md
+- publish_lambda_layer_version.sh
+- README.md
+- run.py
+- sample_sift1m_coordinator_payload.json
+- setup.py
+```
+
 ## Prerequisites
 To run SQUASH using SQLAYER, you will require:
 - An AWS account
 - The AWS CLI to be installed (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html). 
 - The AWS CLI must be configured to connect to your AWS account (https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-quickstart.html)
 - Access to the AWS SDK Boto3 for Python - automatically included if using AWS Cloud9 (Cloud-based IDE)
+
+## Dependencies
 
 ## Instructions - Creating Lambda Layer
 - We recommend the use of AWS Cloud9 (cloud-based IDE) for simplified deployment and configuration of AWS services. (https://aws.amazon.com/cloud9/)
@@ -182,6 +214,9 @@ This is the "multiprocessing" version of the SQUASH run-time (i.e. query-time) s
 - Driver script (free-standing):
     - smp_runner: This script enables configuration of runtime parameters and launch of a query session
 ```
+
+## Dependencies
+
 
 ## Instructions
 Before running this code, SQUASH_BUILD must have been used to build the required SQUASH indexes and support files. The relevant folder should then be copied from SQUASH_BUILD/datasets into SQUASH_MP/datasets.  
