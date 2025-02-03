@@ -33,7 +33,7 @@ class DataManager:
     DEBUG = False
     # BITWISE_CONTAINER_DATATYPE = np.uint32
     # BITWISE_CONTAINER_DATATYPE = np.uint16
-    BITWISE_CONTAINER_DATATYPE = np.uint8
+    BITWISE_CONTAINER_DATATYPE = np.uint8            # Default
 
     def __init__(self, params):
         
