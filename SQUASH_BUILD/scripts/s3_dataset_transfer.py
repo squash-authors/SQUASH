@@ -43,7 +43,7 @@ def run_uploads(path, fname, bucket, partitions_root, allocators_root):
     else:
         exit(1)
         
-    # Upload queryset files for all allocators
+    # Upload queryset files for all QAs
     print()
     allocator_id = 0
     while True:
