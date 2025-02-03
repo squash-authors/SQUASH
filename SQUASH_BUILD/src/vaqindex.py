@@ -17,7 +17,7 @@ class VAQIndex(PipelineElement):
     MAX_PROCESSES = 16
     # BITWISE_CONTAINER_DATATYPE = np.uint32            
     # BITWISE_CONTAINER_DATATYPE = np.uint16              # NB ALSO IN QSESSION - KEEP IN SYNC!
-    BITWISE_CONTAINER_DATATYPE = np.uint8
+    BITWISE_CONTAINER_DATATYPE = np.uint8                 # Default
 
     def __init__(self, ctx: QSession = None):
         self.ctx                  = ctx
