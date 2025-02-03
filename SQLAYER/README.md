@@ -30,13 +30,13 @@
 
 ## Prerequisites
 To run SQUASH using SQLAYER, you will require:
-- An AWS account
+- An AWS account.
 - The AWS CLI to be installed (https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html). 
-- The AWS CLI must be configured to connect to your AWS account (https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-quickstart.html)
-- Access to the AWS SDK Boto3 for Python - automatically included if using AWS Cloud9 (Cloud-based IDE)
+- The AWS CLI must be configured to connect to your AWS account (https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-quickstart.html).
+- Access to the AWS SDK Boto3 for Python - automatically included if using AWS Cloud9 (Cloud-based IDE).
 
 ## Dependencies
-The following package versions were used for SQLAYER.
+The following package versions were used for SQLAYER:
 ```script
 - python==3.11.9
 - numpy==2.0.0
@@ -79,7 +79,7 @@ The following package versions were used for SQLAYER.
 - Create an EFS file system.
     - Create two access points, both at / .  The first has POSIX user 1001 : 1001, the second has 0 : 0.
 - Configure a VPC such that Lambda functions, EFS and S3 are able to access each other.
-- Create a series of Lambda functions, as described in the paper
+- Create a series of Lambda functions, as described in the paper:
     - A coordinator function (sq-coordinator-lambda)
     - An allocator function (sq-allocator-lambda)
     - A series of processor functions - create as many as the number of partitions used at build time
