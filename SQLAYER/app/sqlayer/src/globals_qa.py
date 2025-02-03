@@ -25,6 +25,7 @@ class GQA(object):
            
         client_config = botocore.config.Config(max_pool_connections=100)
 
+        # AWS Clients/ARNs
         self.S3_CLIENT                      = boto3.client('s3', region_name='eu-west-1') 
         self.LAMBDA_CLIENT                  = boto3.client('lambda', region_name='eu-west-1', config=client_config)
         self.QA_LAMBDA_ARN                  = 'arn:aws:lambda:eu-west-1:XXXXXXXXXXXX:function:sq-allocator-lambda'
