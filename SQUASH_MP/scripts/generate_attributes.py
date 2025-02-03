@@ -11,13 +11,13 @@ num_attributes  = 4
 # path            = Path('SQUASH_MP/datasets/siftsmall/')
 # fname           = 'siftsmall'
 
-# num_vectors     = 1000000
-# path            = Path('SQUASH_MP/datasets/sift1m/')
-# fname           = 'sift1m'
-
 num_vectors     = 1000000
-path            = Path('SQUASH_MP/datasets/gist1m/')
-fname           = 'gist1m'
+path            = Path('SQUASH_MP/datasets/sift1m/')
+fname           = 'sift1m'
+
+# num_vectors     = 1000000
+# path            = Path('SQUASH_MP/datasets/gist1m/')
+# fname           = 'gist1m'
 
 full_fname      = os.path.join(path, '') + fname + '.af'
 mode            = 'random'
