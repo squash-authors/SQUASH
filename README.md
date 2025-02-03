@@ -1,5 +1,5 @@
 # SQUASH
-This is a repository for SQUASH: Serverless Quantization-based Unified Attributed Similarity Search at High Dimensionality. SQUASH is the first fully serverless vector database with support for hybrid queries. It features a novel unified quantization-based approach for attributes and vectors, and achieves significantly higher performance than alternative vector search solutions at lower cost.
+This is a repository for SQUASH: Serverless and Distributed Quantization-based Attributed Vector Similarity Search. SQUASH is the first fully serverless vector database with support for hybrid queries. It features OSQ, an optimized and highly parallelizable quantization-based approach for attributes and vectors, and achieves significantly higher performance than alternative vector search solutions at lower cost.
 
 ## SQUASH Architecture
 
