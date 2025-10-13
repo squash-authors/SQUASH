@@ -6,13 +6,15 @@ import timeit
 import csv
 
 from datetime import datetime
-from bitarray import bitarray, util
+# from bitarray import bitarray, util
 from pathlib import Path
+import faiss
 
 class DataManager:
 
     DEBUG = False
     BITWISE_CONTAINER_DATATYPE = np.uint8
+    COMPRESSION_LEVEL           = 3    
 
     def __init__(self, params):
         
@@ -32,6 +34,7 @@ class DataManager:
         self.num_attributes             = None
         self.num_blocks                 = None
         self.word_size                  = None
+        self.datatype                   = None        
         self.big_endian                 = None
         self.bit_budget                 = None
         self.attribute_bit_budget       = None
@@ -54,6 +57,16 @@ class DataManager:
         self.caching                    = None
         self.use_s3                     = None
         self.s3_bucket                  = None
+        self.use_compression            = None
+        self.bigann                     = None
+        self.indextype                  = None
+        self.channel                    = None
+        self.nprA                       = None
+        self.nprB                       = None        
+        self.efsA                       = None
+        self.efsB                       = None
+        self.faiss_threads              = None
+
 
         # AttributeSet
         self.full_afname                = None      # Columner
@@ -73,6 +86,9 @@ class DataManager:
         self.cset                       = None
         self.vaqdata                    = None
         self.bqdata                     = None  
+        
+        # Faiss Index
+        self.faiss_index                = None        
         
         # QuerySet
         self.full_querydata_fname       = None
@@ -108,7 +124,15 @@ class DataManager:
         # Other
         self.warm_start                 = False
         self.efs_bytes_read             = None
-        self.s3_gets                    = None        
+        self.s3_gets                    = None
+        self.qlbl_sizes                 = None
+        self.qlbl_indices               = None
+        self.qlbl_indptr                = None
+        self.fbp_num_elements           = None
+        self.fbp_mask                   = None
+        self.fbp_offsets                = None
+        self.s3_client                  = None
+        self.cand_array                 = None                
 
         np.set_printoptions(linewidth=200)
         
@@ -130,7 +154,11 @@ class DataManager:
         
         # Unload params
         self.unload_params()
-       
+        if self.mode == 'A':
+            self.s3_client = gqa.S3_CLIENT
+        elif self.mode == 'Q':
+            self.s3_client = gqa.S3_CLIENT
+            
         # Qsession
         # --------
         # Add derived parameters used in > one class
@@ -174,6 +202,10 @@ class DataManager:
             self.binary_quantization = True
         else:
             self.binary_quantization = False
+            
+        if self.use_compression and self.channel == 'F':
+            print('Channel F requires use_compression to be set to False!')
+            exit(1)            
 
         # Partitioner
         # -----------
@@ -225,7 +257,10 @@ class DataManager:
         # Other
         # -----
         self.efs_bytes_read      = 0
-        self.s3_gets             = 0            
+        self.s3_gets             = 0
+        self.fbp_num_elements    = np.ceil(self.num_vectors // 8)
+        self.fbp_mask            = np.full((self.fbp_num_elements), 128, dtype=np.uint8)            
+        self.fbp_offsets         = np.array([i * 8 for i in range(self.fbp_num_elements)],dtype=np.int32)               
         
     #----------------------------------------------------------------------------------------------------------------------------------------     
     def unload_params(self):
@@ -242,6 +277,7 @@ class DataManager:
         self.num_attributes          = int(self.params["num_attributes"])
         self.num_blocks              = int(self.params["num_blocks"])
         self.word_size               = int(self.params["word_size"])
+        self.datatype                = self.str_to_dtype(self.params["datatype"])
         self.big_endian              = self.params["big_endian"]
         self.bit_budget              = int(self.params["bit_budget"])
         self.attribute_bit_budget    = int(self.params["attribute_bit_budget"])        
@@ -262,7 +298,16 @@ class DataManager:
         self.vecs_to_print           = np.array(self.params["vecs_to_print"],dtype=np.uint32)
         self.caching                 = self.params["caching"]
         self.use_s3                  = self.params["use_s3"]        
-        self.s3_bucket               = self.params["s3_bucket"]        
+        self.s3_bucket               = self.params["s3_bucket"]
+        self.use_compression         = self.params["use_compression"]               
+        self.bigann                  = self.params["bigann"]
+        self.indextype               = self.params["indextype"]
+        self.channel                 = self.params["channel"]
+        self.nprA                    = int(self.params["nprA"])
+        self.nprB                    = int(self.params["nprB"])
+        self.efsA                    = int(self.params["efsA"])
+        self.efsB                    = int(self.params["efsB"])
+        self.faiss_threads           = int(self.params["faiss_threads"])        
     #----------------------------------------------------------------------------------------------------------------------------------------     
     # QSession   
     def process_timer(self, metric, start_timer):
@@ -325,15 +370,16 @@ class DataManager:
     # DataSet           USED IN PRVD AND CALC_RAW_DISTANCES: CONVERT TO S3
     def ds_random_read_vector(self, vector_id):  
         vector_words = (self.num_dimensions + 1) 
-        offset       = np.uint64(vector_id * vector_words * self.word_size)
+        # offset       = np.uint64(vector_id * vector_words * self.word_size)
+        offset       = np.uint64(vector_id * vector_words * self.datatype().itemsize)
         
         if self.ds_handle is None:
             with open(self.full_fname, mode='rb') as f:
                 f.seek(offset, os.SEEK_SET)
-                vector = np.fromfile(file=f, count=vector_words, dtype=np.float32)                
+                vector = np.fromfile(file=f, count=vector_words, dtype=self.datatype)                
         else:
             self.ds_handle.seek(offset, os.SEEK_SET)
-            vector = np.fromfile(file=self.ds_handle, count=vector_words, dtype=np.float32)
+            vector = np.fromfile(file=self.ds_handle, count=vector_words, dtype=self.datatype)
 
         self.efs_bytes_read += (vector_words * self.word_size)
 
@@ -454,7 +500,10 @@ class DataManager:
         block_idx       = 0
 
         while dim < self.num_dimensions:
-            block = self.vaqdata[:,block_idx].reshape(self.num_vectors)
+            if self.candidate_count > 0:
+                block = self.vaqdata[self.candidates,block_idx].reshape(self.candidate_count)
+            else:
+                block = self.vaqdata[:,block_idx].reshape(self.num_vectors)
             while dim < self.num_dimensions:
                 
                 if seg_used == dt_bits:
@@ -470,10 +519,11 @@ class DataManager:
                         seg_used = bit_allocs[dim] - residual_bits
                         dim += 1
                         residual_bits = 0
-                        if self.candidate_count > 0:
-                            yield out_block[self.candidates].reshape(self.candidate_count)
-                        else:
-                            yield out_block.reshape(self.num_vectors)
+                        # if self.candidate_count > 0:
+                        #     yield out_block[self.candidates].reshape(self.candidate_count)
+                        # else:
+                        #     yield out_block.reshape(self.num_vectors)
+                        yield out_block
                 
                 elif seg_used == 0:
                     out_block = np.right_shift(block,dt_bits - bit_allocs[dim])
@@ -481,10 +531,11 @@ class DataManager:
                     # print(out_block)                
                     seg_used += bit_allocs[dim]
                     dim += 1
-                    if self.candidate_count > 0:
-                        yield out_block[self.candidates].reshape(self.candidate_count)
-                    else:
-                        yield out_block.reshape(self.num_vectors)
+                    # if self.candidate_count > 0:
+                    #     yield out_block[self.candidates].reshape(self.candidate_count)
+                    # else:
+                    #     yield out_block.reshape(self.num_vectors)
+                    yield out_block
                     
                 elif (seg_used > 0) and (bit_allocs[dim] <= (dt_bits - seg_used)):
                     out_block = np.right_shift(np.left_shift(block,seg_used),dt_bits - bit_allocs[dim])
@@ -492,11 +543,12 @@ class DataManager:
                     # print(out_block)                
                     seg_used += bit_allocs[dim]
                     dim += 1
-                    if self.candidate_count > 0:
-                        yield out_block[self.candidates].reshape(self.candidate_count)
-                    else:
-                        yield out_block.reshape(self.num_vectors)
-
+                    # if self.candidate_count > 0:
+                    #     yield out_block[self.candidates].reshape(self.candidate_count)
+                    # else:
+                    #     yield out_block.reshape(self.num_vectors)
+                    yield out_block
+                    
                 elif (seg_used > 0) and (bit_allocs[dim] > (dt_bits - seg_used)):                
                     segment_residue = np.right_shift(np.left_shift(block,seg_used), dt_bits - bit_allocs[dim])
                     residual_bits = dt_bits - seg_used
@@ -626,12 +678,17 @@ class DataManager:
             self.efs_bytes_read += os.path.getsize(qd_fname)
         with np.load(qd_fname) as data_qry:
                         queries                     = data_qry['QUERIES']                            
-                        self.predicate_sets         = data_qry['PRED_SETS']
                         self.gt_raw_data            = data_qry['GT_RAW']   
                         self.gt_raw_dists_data      = data_qry['GT_RAW_DISTS']   
                         self.gt_attr_data           = data_qry['GT_ATTR']   
                         self.gt_attr_dists_data     = data_qry['GT_ATTR_DISTS']
                         self.query_inds             = data_qry['INDS']
+                        if not self.bigann:
+                            self.predicate_sets         = data_qry['PRED_SETS']
+                        else:
+                            self.qlbl_sizes             = data_qry['QLBL_SIZES']          
+                            self.qlbl_indices           = data_qry['QLBL_INDICES']
+                            self.qlbl_indptr            = data_qry['QLBL_INDPTR']                        
 
         # Reshape and trim identifiers
         print("queries shape before reshape + trim identifiers: ", np.shape(queries))
@@ -645,7 +702,7 @@ class DataManager:
         # self.first_stage = np.zeros((self.num_queries), dtype=np.uint32)
         # self.second_stage = np.zeros((self.num_queries), dtype=np.uint32)     
         
-        if self.num_attributes > 0:
+        if (self.num_attributes > 0) and (not self.bigann):
             self.calculate_attribute_masks()    
             
         if self.check_recall:
@@ -736,7 +793,13 @@ class DataManager:
             # Having iterated through attributes, we have a packbits mask for all vectors. Unpack, we need idx positions
             # self.candidates = np.array(bitarray(endian='big', buffer=self.attr_masks).search(1),dtype=np.uint32)
             # self.candidate_count = self.candidates.shape[0]
-            self.candidate_count = np.array(bitarray(endian='big', buffer=self.attr_masks).count(1),dtype=np.uint32)
+            
+            # # bitarray version
+            # self.candidate_count = np.array(bitarray(endian='big', buffer=self.attr_masks).count(1),dtype=np.uint32)
+            
+            # NumPy version
+            self.candidate_count = np.array((np.bitwise_count(self.attr_masks).sum()), dtype=np.uint32)
+            
             # self.attr_filtering_count = np.subtract(self.num_vectors, self.candidate_count)
             print('Candidates after attribute filtering : ', self.candidate_count)
         else:
@@ -745,7 +808,58 @@ class DataManager:
             
         msg = 'Query : ' + str(query_idx) + ' Attribute Filtering Duration'
         self.debug_timer('DataManager.apply_attribute_filters',attr_reft, msg)          
-    # ----------------------------------------------------------------------------------------------------------------------------------------    
+    # ---------------------------------------------------------------------------------------------------------------------------------------- 
+    # Utility
+    def find_bit_positions(self, ba):
+        # bacopy      = ba.copy()
+        bacopy      = ba.copy()[0:self.fbp_offsets.shape[0]]
+        results     = np.zeros((8,self.fbp_num_elements),dtype=np.int32)
+        for shift in range(8):
+            
+            # matches         = np.int32(np.right_shift(np.bitwise_and(bacopy, self.fbp_mask),7))
+            # results[shift]  = np.where(matches==1, self.fbp_offsets + shift,-1)
+            matches         = np.int32(np.bitwise_and(bacopy, self.fbp_mask))
+            results[shift]  = np.where(matches==128, self.fbp_offsets + shift,-1)             
+            
+            bacopy          = np.left_shift(bacopy,1)
+            shift += 1
+
+        out = np.ravel(results, order='F')
+        return np.uint32(out[out>=0])    
+    # ----------------------------------------------------------------------------------------------------------------------------------------     
+    # Labels    
+    def apply_label_filters(self, query_idx):
+        attr_reft = timeit.default_timer()    
+        
+        # Initialize
+        attr_masks      = np.zeros((self.num_vectors), dtype=np.uint8)
+        self.candidate_count = 0
+
+        # Get query label indices
+        qwords = self.qlbl_indices[self.qlbl_indptr[query_idx] : self.qlbl_indptr[query_idx + 1]]
+        assert qwords.size in (1, 2), "Wrong number of qwords found : " + str(qwords.size)
+        w1 = qwords[0]
+        if qwords.size == 2:
+            w2 = qwords[1]
+        else:
+            w2 = -1    
+        
+        # Find vectors with matching labels
+        matching_vecs1 = self.lbl_csrt_indices[self.lbl_csrt_indptr[w1] : self.lbl_csrt_indptr[w1 + 1]]
+        if w2 != -1:
+            matching_vecs2 = self.lbl_csrt_indices[self.lbl_csrt_indptr[w2] : self.lbl_csrt_indptr[w2 + 1]]
+            candidates = np.intersect1d(matching_vecs1, matching_vecs2)        
+        else:
+            candidates = matching_vecs1
+
+        # Update mask
+        attr_masks[candidates] = 1
+        self.attr_masks = np.packbits(attr_masks, axis=0)
+        self.candidate_count = candidates.shape[0]
+
+        msg = 'Query : ' + str(query_idx) + ' Label Filtering Duration'
+        self.debug_timer('DataManager.apply_label_filters',attr_reft, msg)          
+    # ----------------------------------------------------------------------------------------------------------------------------------------            
     # QuerySet
     def transform_queries(self):
         X = self.Q
@@ -788,7 +902,14 @@ class DataManager:
         # 20th Sep
         candidates  = np.bitwise_and(self.partition_vectors[:,partition_id], self.attr_masks)
         pv_part     = self.partition_vectors[:,partition_id].copy()
-        selection   = np.array(bitarray(endian='big', buffer=pv_part).search(1),dtype=np.uint32)
+        # selection   = np.array(bitarray(endian='big', buffer=pv_part).search(1),dtype=np.uint32)
+        
+        # # Using bitarray
+        # selection   = np.array(list(bitarray(endian='big', buffer=pv_part).search(1)),dtype=np.uint32)
+        
+        # Using custom method
+        selection  = self.find_bit_positions(pv_part)
+        
         candidates  = np.unpackbits(candidates)[selection]
         
         return np.packbits(candidates), np.sum(candidates)
@@ -803,7 +924,8 @@ class DataManager:
         gqa.partition_vectors = gqa.partition_ids = gqa.partition_pops = gqa.partition_centroids = None
         gqa.at_means = gqa.at_stdevs = gqa.attribute_cells = gqa.attribute_boundary_vals = None
         gqa.dim_means = gqa.cov_matrix = gqa.transform_matrix = None
-        gqa.quant_attr_data = None            
+        gqa.quant_attr_data = None    
+        gqa.lbl_counters = gqa.lbl_csrt_indices = gqa.lbl_csrt_indptr = None        
             
     # ----------------------------------------------------------------------------------------------------------------------------------------
     # DataManager
@@ -816,7 +938,8 @@ class DataManager:
         gqp.dim_means = gqp.cov_matrix = gqp.transform_matrix = None
         gqp.tf_dim_means = gqp.tf_stdevs = None
         gqp.cells = gqp.boundary_vals = gqp.sdc_lookup_lower = gqp.sdc_lookup_upper = None
-        gqp.vaqdata = gqp.bqdata = None  
+        gqp.vaqdata = gqp.bqdata = None
+        gqp.indextype = gqp.faiss_index = None
             
     # ----------------------------------------------------------------------------------------------------------------------------------------    
     # Utility
@@ -852,11 +975,23 @@ class DataManager:
         return partition, offset
     # ----------------------------------------------------------------------------------------------------------------------------------------  
     # Utility
-    def find_partition_vecids(self, global_vecids, partid):
+    def find_partition_vecids(self, vecids, partid):
         lookup = np.unpackbits(self.partition_vectors[:,partid])
-        return np.where(lookup == 1)[0][global_vecids]
-
+        return np.where(lookup == 1)[0][vecids]
+    
+        # nonzero_ids             = np.trim_zeros(vecids,'b')
+        # converted_nonzero_ids   = np.uint32(np.where(lookup == 1)[0][nonzero_ids])
+        # pad_width               = (0,self.query_k - len(converted_nonzero_ids))
+        # # return np.pad(converted_nonzero_ids, pad_width, mode='constant', constant_values=np.iinfo(converted_nonzero_ids.dtype).max)  
+        # return np.pad(converted_nonzero_ids, pad_width, mode='constant', constant_values=-1)     
     # ----------------------------------------------------------------------------------------------------------------------------------------
+    # Utility
+    def str_to_dtype(self, intype):
+        types = {'int8' : np.int8,   'int16': np.int16,     'int32': np.int32,     'int64': np.int64,
+                'uint8': np.uint8, 'uint16': np.uint16,   'uint32': np.uint32,   'uint64': np.uint64,
+                                'float16': np.float16, 'float32': np.float32, 'float64': np.float64}
+        return types[intype]
+    # ----------------------------------------------------------------------------------------------------------------------------------------    
     # Partitioner        
     def load_partitioner_vars(self):
         print("Loading partitioner variables from ", self.path)
@@ -881,8 +1016,10 @@ class DataManager:
         
         if self.mode == 'A':
             self.load_qa_data()
-        elif self.mode == 'Q':
+        elif self.mode == 'Q' and self.indextype == 'OSQ':
             self.load_qp_data()
+        elif self.mode == 'Q' and self.indextype != 'OSQ':            
+            self.load_qp_data_faiss()
         elif self.mode == 'P':
             pass
         else:
@@ -897,12 +1034,14 @@ class DataManager:
     def s3_download(self, ftype=None):
         
         local_path  = Path('/tmp/')
-        if self.mode == 'A':
-            global gqa
-            s3_client = gqa.S3_CLIENT
-        else:
-            global gqp
-            s3_client = gqp.S3_CLIENT
+        
+        # Below now done in intialize
+        # if self.mode == 'A':
+        #     global gqa
+        #     s3_client = gqa.S3_CLIENT
+        # else:
+        #     global gqp
+        #     s3_client = gqp.S3_CLIENT
 
         path_for_s3 = self.path.replace("/mnt/squash/", "")
         print("In s3_download, path_for_s3: ", path_for_s3)
@@ -913,7 +1052,7 @@ class DataManager:
             qavars_key  = os.path.join(path_for_s3, '') + self.fname + '.qavars.npz'
             # print("qavars_key: ", qavars_key)
             qavars_file = os.path.join(local_path,'') + self.fname + '.qavars.npz'
-            s3_client.download_file(self.s3_bucket, qavars_key, qavars_file)
+            self.s3_client.download_file(self.s3_bucket, qavars_key, qavars_file)
             self.s3_gets += 1             
             return qavars_file
 
@@ -922,16 +1061,20 @@ class DataManager:
             # qry_key     = os.path.join(self.path, self.allocators_root, self.allocator_id, '') + self.fname + '_qry.npz'
             qry_key     = os.path.join(path_for_s3, str(self.allocators_root), str(self.allocator_id), '') + self.fname + '_qry.npz'
             qry_file    = os.path.join(local_path,'') + self.fname + '_qry.npz'    
-            s3_client.download_file(self.s3_bucket, qry_key, qry_file)
+            self.s3_client.download_file(self.s3_bucket, qry_key, qry_file)
             self.s3_gets += 1               
             return qry_file
 
-        elif ftype == 'qp'          :
-            # Need qpvars.npz (partitions folder) - self.path is a partition-level directory (eg datasets/sift1m/partitions/0/)
-            # qpvars_key  = os.path.join(self.path, '') + self.fname + '.qpvars.npz'
-            qpvars_key  = os.path.join(path_for_s3, '') + self.fname + '.qpvars.npz'
-            qpvars_file = os.path.join(local_path,'') + self.fname + '.qpvars.npz'
-            s3_client.download_file(self.s3_bucket, qpvars_key, qpvars_file)
+        elif ftype == 'qp':
+            qp_bucket = self.s3_bucket + '-' + os.path.split(self.path)[1]
+            if self.indextype == 'OSQ':
+                qpvars_key  = os.path.join(path_for_s3, '') + self.fname + '.qpvars.npz'
+                qpvars_file = os.path.join(local_path,'') + self.fname + '.qpvars.npz'
+            else:
+                qpvars_key  = os.path.join(path_for_s3, '') + self.fname + '.qpvars_' + self.indextype + '.npz'
+                qpvars_file = os.path.join(local_path,'') + self.fname + '.qpvars_' + self.indextype + '.npz'
+            # self.s3_client.download_file(self.s3_bucket, qpvars_key, qpvars_file)
+            self.s3_client.download_file(qp_bucket, qpvars_key, qpvars_file)
             self.s3_gets += 1               
             return qpvars_file
         
@@ -939,7 +1082,72 @@ class DataManager:
             'DataManager->s3_download: Invalid ftype ', ftype, ' requested!'
             return '1'
 
-    # ----------------------------------------------------------------------------------------------------------------------------------------              
+    # ----------------------------------------------------------------------------------------------------------------------------------------
+    # DataManager
+    def send_qp_candfile(self, pno, fkey, arr):
+        
+        if not self.use_s3:
+            # Writing cands file to EFS/local
+            tmp_path = os.path.join(self.path, 'tmp')
+            if not os.path.exists(tmp_path):
+                print("Failed to find file channel path : ",tmp_path)
+                exit(1)                      
+            cand_full_fname = os.path.join(tmp_path, '') + fkey
+            np.savez(cand_full_fname, CANDS=arr)
+                
+        else:
+            # Writing cands file to S3
+            np.set_printoptions(threshold=np.inf)
+            cand_array_str = str(zlib.compress(arr, level=DataManager.COMPRESSION_LEVEL))
+
+            full_fkey = os.path.join(self.path, 'tmp', fkey)
+            qp_bucket = self.s3_bucket + '-' + os.path.split(self.path)[1]
+            # result = self.s3_client.put_object(Bucket=self.s3_bucket, Key=full_fkey, Body=cand_array_str)
+            result = self.s3_client.put_object(Bucket=qp_bucket, Key=full_fkey, Body=cand_array_str)
+            res = result.get('ResponseMetadata')
+            status_code = res.get('HTTPStatusCode')
+
+            if status_code != 200:
+                print("[ERROR]: Failed to upload csr file to s3 -> Bucket : ", self.s3_bucket, " File Name : ", cand_full_fname, " ERROR CODE : ", str(status_code), flush=True)
+                os._exit(1)	            
+    # ----------------------------------------------------------------------------------------------------------------------------------------
+    # DataManager
+    def receive_qp_candfile(self, fkey, num_queries):
+        
+        root_path = os.path.split(os.path.split(self.path)[0])[0]
+        if not self.use_s3:
+            # Reading cands file from EFS/local
+            tmp_path = os.path.join(root_path, 'tmp')
+            cand_full_fname = os.path.join(tmp_path, '') + fkey + '.npz'
+            print("Loading candidates from ", cand_full_fname)
+            if os.access(cand_full_fname, os.R_OK):
+                with np.load(cand_full_fname) as cands:
+                    self.cand_array = cands['CANDS']
+                return True
+            else:
+                return False
+
+        else:
+            # Reading cands file from S3
+            np.set_printoptions(threshold=np.inf)
+            full_fkey = os.path.join(root_path, 'tmp', fkey)
+            qp_bucket = self.s3_bucket + '-' + os.path.split(self.path)[1]
+            try:
+                # Download object from s3
+                # obj = self.s3_client.get_object(Bucket=self.s3_bucket, Key=full_fkey)
+                obj = self.s3_client.get_object(Bucket=qp_bucket, Key=full_fkey)
+                obj_str = obj["Body"].read().decode('utf-8') 
+    
+            except ClientError as e:
+                # error_code = e.response["Error"]["Code"]
+                # print("[ERROR]: Failed to download file from s3 -> Filename : ", full_fkey, " ERROR CODE : ", str(error_code), flush=True)
+                return False
+
+            decomp           = zlib.decompress(eval(obj_str))
+            self.cand_array  = np.frombuffer(decomp, dtype=np.uint8).reshape(num_queries, self.fbp_num_elements)
+            return True
+       
+    # ----------------------------------------------------------------------------------------------------------------------------------------    
     # DataManager
     def load_qa_data(self):
         
@@ -956,6 +1164,8 @@ class DataManager:
         else:
             print('Loading QA Data from File!')
             self.warm_start = False
+            # gqa.reset()
+            self.unset_qa_globals()
             gqa.path       = self.path
             gqa.fname      = self.fname
             if self.use_s3:
@@ -963,34 +1173,50 @@ class DataManager:
             else:
                 qa_fname = stub + '.qavars.npz'
                 self.efs_bytes_read += os.path.getsize(qa_fname)
+            
             with np.load(qa_fname) as data_qa:
                 gqa.partition_vectors          = data_qa['PART_VECTORS']
                 gqa.partition_ids              = data_qa['PART_IDS']
                 gqa.partition_pops             = data_qa['PART_POPS']
                 gqa.partition_centroids        = data_qa['PART_CENTROIDS']
-                gqa.at_means                   = data_qa['AT_MEANS']                            
-                gqa.at_stdevs                  = data_qa['AT_STDEVS']
-                gqa.attribute_cells            = data_qa['AT_CELLS']                            
-                gqa.attribute_boundary_vals    = data_qa['AT_BVALS']
                 gqa.dim_means                  = data_qa['DIM_MEANS']                            
                 gqa.cov_matrix                 = data_qa['COV_MATRIX']                            
                 gqa.transform_matrix           = data_qa['TRANSFORM_MATRIX']
-                gqa.quant_attr_data            = data_qa['QATT_DATA']
+                if not self.bigann:
+                    gqa.quant_attr_data            = data_qa['QATT_DATA']                                                                         
+                    gqa.at_means                   = data_qa['AT_MEANS']                            
+                    gqa.at_stdevs                  = data_qa['AT_STDEVS']
+                    gqa.attribute_cells            = data_qa['AT_CELLS']                            
+                    gqa.attribute_boundary_vals    = data_qa['AT_BVALS']
+                else:
+                    gqa.lbl_counters               = data_qa['LBL_COUNTERS']
+                    # gqa.lbl_vocab_sig              = data_qa['LBL_VOCAB_SIG']
+                    # gqa.lbl_ds_sig                 = data_qa['LBL_DSSIG']
+                    gqa.lbl_csrt_indices           = data_qa['LBL_INDICES']
+                    gqa.lbl_csrt_indptr            = data_qa['LBL_INDPTR']
+                
                 
         # In both cases point instance variables to globals
         self.partition_vectors                  = gqa.partition_vectors
         self.partition_ids                      = gqa.partition_ids
         self.partition_pops                     = gqa.partition_pops
         self.partition_centroids                = gqa.partition_centroids
-        self.at_means                           = gqa.at_means
-        self.at_stdevs                          = gqa.at_stdevs
-        self.attribute_cells                    = gqa.attribute_cells
-        self.attribute_boundary_vals            = gqa.attribute_boundary_vals
         self.dim_means                          = gqa.dim_means
         self.cov_matrix                         = gqa.cov_matrix
         self.transform_matrix                   = gqa.transform_matrix
-        self.quant_attr_data                    = gqa.quant_attr_data
-        
+        if not self.bigann:        
+            self.at_means                           = gqa.at_means
+            self.at_stdevs                          = gqa.at_stdevs
+            self.attribute_cells                    = gqa.attribute_cells
+            self.attribute_boundary_vals            = gqa.attribute_boundary_vals
+            self.quant_attr_data                    = gqa.quant_attr_data
+        else:
+            self.lbl_counters                       = gqa.lbl_counters
+            # self.lbl_vocab_sig                      = gqa.lbl_vocab_sig
+            # self.lbl_ds_sig                         = gqa.lbl_ds_sig
+            self.lbl_csrt_indices                   = gqa.lbl_csrt_indices
+            self.lbl_csrt_indptr                    = gqa.lbl_csrt_indptr
+                        
         # for pv in range(self.partition_vectors.shape[1]):
         #     self.partition_vectors_packed.append(np.packbits(self.partition_vectors[:,pv]))
 
@@ -1007,24 +1233,30 @@ class DataManager:
         print('DataManager : Loading Data for Mode ', self.mode)
         print()
         
-        if (gqp.path == self.path) and (gqp.fname == self.fname):
+        # if (gqp.path == self.path) and (gqp.fname == self.fname):
+        if (gqp.path == self.path) and (gqp.fname == self.fname) and (gqp.indextype == self.indextype):        
             print('Loading QP Data from Global Area!')
             self.warm_start                 = True
         else:
             print('Loading QP Data from File!')
             self.warm_start = False
+            # gqp.reset()
+            self.unset_qp_globals()
             gqp.path       = self.path
             gqp.fname      = self.fname
+            gqp.indextype  = self.indextype
             if self.use_s3:
                 qp_fname = self.s3_download(ftype='qp')
             else:
                 qp_fname = stub + '.qpvars.npz'
                 self.efs_bytes_read += os.path.getsize(qp_fname)
             with np.load(qp_fname) as data_qp:
-                gqp.at_means                   = data_qp['AT_MEANS']                            
-                gqp.at_stdevs                  = data_qp['AT_STDEVS']
-                gqp.attribute_cells            = data_qp['AT_CELLS']                            
-                gqp.attribute_boundary_vals    = data_qp['AT_BVALS']                
+                # if not self.bigann:
+                #     gqp.at_means                   = data_qp['AT_MEANS']                            
+                #     gqp.at_stdevs                  = data_qp['AT_STDEVS']
+                #     gqp.attribute_cells            = data_qp['AT_CELLS']                            
+                #     gqp.attribute_boundary_vals    = data_qp['AT_BVALS']
+                #     gqp.quant_attr_data            = data_qp['QATT_DATA']             
                 gqp.dim_means                  = data_qp['DIM_MEANS']
                 gqp.cov_matrix                 = data_qp['COV_MATRIX']
                 gqp.transform_matrix           = data_qp['TRANSFORM_MATRIX']
@@ -1034,7 +1266,7 @@ class DataManager:
                 gqp.boundary_vals              = data_qp['BOUNDARY_VALS']
                 gqp.sdc_lookup_lower           = data_qp['SDC_LOOKUP_LOWER']                            
                 gqp.sdc_lookup_upper           = data_qp['SDC_LOOKUP_UPPER']
-                gqp.quant_attr_data            = data_qp['QATT_DATA']   
+                   
                 
                 if self.inmem_vaqdata in ('inmem_oneshot','inmem_columnar'):                        
                     gqp.vaqdata        = data_qp['VAQ_DATA']
@@ -1050,10 +1282,12 @@ class DataManager:
                     gqp.bqdata         = data_qp['BQ_DATA']
                 
         # In both cases point instance variables to globals
-        self.at_means                   = gqp.at_means
-        self.at_stdevs                  = gqp.at_stdevs
-        self.attribute_cells            = gqp.attribute_cells
-        self.attribute_boundary_vals    = gqp.attribute_boundary_vals        
+        # if not self.bigann:
+        #     self.at_means                   = gqp.at_means
+        #     self.at_stdevs                  = gqp.at_stdevs
+        #     self.attribute_cells            = gqp.attribute_cells
+        #     self.attribute_boundary_vals    = gqp.attribute_boundary_vals
+        #     self.quant_attr_data            = gqp.quant_attr_data        
         self.dim_means                  = gqp.dim_means
         self.cov_matrix                 = gqp.cov_matrix
         self.transform_matrix           = gqp.transform_matrix
@@ -1065,11 +1299,46 @@ class DataManager:
         self.sdc_lookup_upper           = gqp.sdc_lookup_upper
         self.vaqdata                    = gqp.vaqdata
         self.bqdata                     = gqp.bqdata
-        self.quant_attr_data            = gqp.quant_attr_data
+        
         
         print('DataManager : QP Data Loaded!')        
         print()
     # ----------------------------------------------------------------------------------------------------------------------------------------
+    # DataManager
+    def load_qp_data_faiss(self):
+        
+        global gqp
+        stub = os.path.join(self.path, '') + self.fname
+        
+        print()
+        print('DataManager : Loading (Faiss) Data for Mode ', self.mode)
+        print()
+        
+        if (gqp.path == self.path) and (gqp.fname == self.fname) and (gqp.indextype == self.indextype):
+            print('Loading QP Faiss Data from Global Area!')
+            self.warm_start                 = True
+        else:
+            print('Loading QP Faiss Data from File!')
+            self.warm_start = False
+            # gqp.reset()
+            self.unset_qp_globals()
+            gqp.path       = self.path
+            gqp.fname      = self.fname
+            gqp.indextype  = self.indextype
+            if self.use_s3:
+                qp_fname = self.s3_download(ftype='qp')
+            else:
+                qp_fname = stub + '.qpvars_' + self.indextype + '.npz'
+                self.efs_bytes_read += os.path.getsize(qp_fname)                
+            with np.load(qp_fname) as data_qp:
+                gqp.faiss_index = faiss.deserialize_index(data_qp['FAISS_INDEX'])
+                
+        # In both cases point instance variables to globals
+        self.faiss_index                = gqp.faiss_index
+        
+        print('DataManager : QP Faiss Data Loaded!')        
+        print()
+    # ----------------------------------------------------------------------------------------------------------------------------------------    
 
 
                              
