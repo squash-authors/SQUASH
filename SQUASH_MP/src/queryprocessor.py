@@ -6,6 +6,9 @@ from datetime import datetime
 import csv
 import json
 import time
+import zlib
+
+import faiss
 
 # from scipy.ndimage import minimum_filter1d, maximum_filter1d
 # from bitarray import bitarray, util
@@ -58,6 +61,7 @@ class QueryProcessor:
         self.dmg_params         = self.payload["dmg_params"]
         self.qp_params          = self.payload["qp_params"]
         
+        
         # Instantite Datamanager and load relevant data
         self.dmg : DataManager      = DataManager(params=self.dmg_params)
         
@@ -75,21 +79,33 @@ class QueryProcessor:
         self.query_ref          = int(qdata["query_ref"])
         self.num_candidates     = int(qdata["num_candidates"])
         self.query              = np.array(qdata["query"], dtype=np.float32)
-        self.predicate_set      = np.array(qdata["predicate_set"], dtype='U10')        
-        self.candidates         = np.array(qdata["candidates"],dtype=np.uint8)
+        if not self.dmg.bigann:
+            self.predicate_set      = np.array(qdata["predicate_set"], dtype='U10') 
+        if self.num_candidates > 0:                   
+            if self.dmg.use_compression:
+                self.candidates         = np.frombuffer(zlib.decompress(eval(qdata["candidates"])), dtype=np.uint8)
+            else:
+                self.candidates         = np.array(qdata["candidates"],dtype=np.uint8)
 
-        # Unpack payload items into dmg instance variables
-        cands = np.unpackbits(self.candidates)[0:self.dmg.num_vectors]
-        self.dmg.candidates         = np.where(cands == 1)[0]
+        # Unpack payload items into dmg instance variables. If zero candidates, filtering is off so don't have candidate list yet
+        if self.num_candidates > 0:
+            cands = np.unpackbits(self.candidates)[0:self.dmg.num_vectors]
+            self.dmg.candidates         = np.where(cands == 1)[0]
+            # self.dmg.candidates          = self.dmg.find_bit_positions(self.candidates)           
+        
         self.dmg.candidate_count    = self.num_candidates
         self.dmg.Q                  = np.zeros((1,self.dmg.num_dimensions), dtype=np.float32)
         self.dmg.Q_raw              = np.zeros((1,self.dmg.num_dimensions), dtype=np.float32)
         self.dmg.Q[0,:]             = np.array(self.query, dtype=np.float32)
         self.dmg.Q_raw[0,:]         = np.array(self.query, dtype=np.float32)
         self.dmg.num_queries        = 1
-        self.dmg.predicate_sets = np.atleast_2d(self.predicate_set)
+        if not self.dmg.bigann:
+            self.dmg.predicate_sets = np.atleast_2d(self.predicate_set)
     # ----------------------------------------------------------------------------------------------------------------------------------------
     def recheck_predicates(self, vec_id, q_id) -> bool:
+        
+        if self.dmg.bigann:
+            return True
         
         vec_attrs = self.dmg.read_vector_attributes(vector_id=vec_id, type='raw')
         query_pred_set = self.dmg.predicate_sets[q_id]
@@ -216,8 +232,9 @@ class QueryProcessor:
 
             # print(self.dmg.candidate_hammings[0:self.dmg.query_k])            
             print(self.H[0:self.dmg.query_k])                        
-            print('Best Hammings')
-            print(self.dmg.candidate_hammings[0:self.dmg.query_k])
+            if self.dmg.candidate_hammings is not None:
+                print('Best Hammings')
+                print(self.dmg.candidate_hammings[0:self.dmg.query_k])
     # ----------------------------------------------------------------------------------------------------------------------------------------
     def write_metrics_info(self): # Write metrics info for all queries.
 
@@ -311,6 +328,7 @@ class QueryProcessor:
             if self.dmg.candidate_count > 0:
                 id = self.dmg.candidates[i]
                 id = J_FULL[i]
+                # if not self.dmg.bigann:
                 if not self.recheck_predicates(vec_id=id, q_id=query_idx):
                     continue
             else:
@@ -469,7 +487,8 @@ class QueryProcessor:
         # For current results, calc actual distances
         self.dmg.ds_open_file()
         for ind in range(self.V.shape[0]):
-            if self.V[ind] != np.inf:
+            # if self.V[ind] != np.inf:
+            if (self.V[ind] != np.inf) and (self.V[ind] != -1):
                 vec = self.dmg.ds_random_read_vector(int(self.V[ind]))
                 self.ANS[ind] = np.sqrt(np.sum(np.square(np.subtract(vec, self.dmg.Q_raw[qid]))))
             else:
@@ -480,7 +499,7 @@ class QueryProcessor:
         self.ANS    = np.sort(self.ANS)        
             
         # Check attributes for these vectors exactly satisfy predicates   
-        if self.dmg.num_attributes > 0:         
+        if (self.dmg.num_attributes > 0) and (not self.dmg.bigann):         
             pred_matches = np.zeros((self.V.shape[0]), dtype=np.uint8)    
             for ind, vec in enumerate(self.V):
                 pred_matches[ind] = self.recheck_predicates(vec,qid)
@@ -619,7 +638,87 @@ class QueryProcessor:
 
             # Print results of current query
             self.print_res_info(self.query_ref)
-    # ----------------------------------------------------------------------------------------------------------------------------------------                    
+    # ----------------------------------------------------------------------------------------------------------------------------------------
+    def run_queries_faiss(self):
+        
+        # Set model-specific params
+        faiss_threads = self.dmg.faiss_threads
+        nprobe = ef_search = 0
+        if self.dmg.indextype in ('IndexSQ8', 'IndexFlatL2', 'IndexRaBitQ'):
+            # faiss_threads       = 1
+            searchparams        = faiss.SearchParameters() 
+        elif self.dmg.indextype in ('IndexPQ'):    
+            # faiss_threads       = 1
+            searchparams        = faiss.SearchParametersPQ()             
+        elif self.dmg.indextype == 'IF_IVF256_SQ8':
+            nprobe              = self.dmg.nprA
+            # faiss_threads       = 1
+            searchparams        = faiss.SearchParametersIVF(nprobe=nprobe)
+        elif self.dmg.indextype == 'IndexHNSWFlat':
+            ef_search           = self.dmg.efsA  
+            # faiss_threads       = 1
+            searchparams        = faiss.SearchParametersHNSW(efSearch=ef_search) 
+        elif self.dmg.indextype == 'IF_IVF4096_HNSW32_SQ8':            
+            nprobe              = self.dmg.nprB
+            ef_search           = self.dmg.efsB
+            ivf                 = faiss.extract_index_ivf(self.dmg.faiss_index)
+            ivf.nprobe          = nprobe    
+            # faiss_threads       = 10
+            searchparams        = faiss.SearchParametersIVF(nprobe=nprobe, quantizer_params=faiss.SearchParametersHNSW(efSearch=ef_search))
+        
+        print('Faiss Params: nprobe ', nprobe, ' ef_search ', ef_search, ' faiss_threads ', faiss_threads)
+        
+        faiss.omp_set_num_threads(faiss_threads)        
+        id_selector = None
+        filter = (self.dmg.num_attributes > 0) or (self.dmg.bigann)
+        for i in range(len(self.qp_params)):
+            self.query_start_time = time.perf_counter()
+            
+            # Per-query initialization and setup
+            self.initialize_for_query(json.loads(self.qp_params[i]))
+           
+            print()
+            print("****************************************")
+            print("Now processing query idx: ", str(self.query_ref))
+            print("****************************************")
+            
+            # Reset variables
+            self.ANS                            = None
+            self.UP                             = None
+            self.V                              = None
+            self.L                              = None
+            self.U                              = None
+            self.S1                             = None
+            self.S2                             = None
+            self.dmg.hammings                   = None
+            self.dmg.candidate_hammings         = None
+                
+            qreft = timeit.default_timer()        
+
+            if id_selector:
+                del id_selector
+            if filter:
+                id_selector         = faiss.IDSelectorArray(self.dmg.candidates)
+                searchparams.sel    = id_selector
+            kadjusted           = int(self.dmg.query_k * self.dmg.k_factor)
+            distances, indices  = self.dmg.faiss_index.search(self.dmg.Q[0].reshape(1,self.dmg.num_dimensions), kadjusted, params=searchparams) 
+            self.ANS            = distances[0][distances[0] != 3.4028235e+38]   # This is value returned if search runs out of valid results
+            self.V              = indices[0][indices[0] >= 0]
+            # self.H              = np.zeros(kadjusted, dtype=np.uint8)   
+            self.H              = np.zeros(self.V.shape[0], dtype=np.uint8)   
+            
+            if self.dmg.fine_tune:
+                self.fine_tune_results(0)
+
+            msg = 'Query : ' + str(self.query_ref) + ' Query duration'            
+            self.dmg.debug_timer('QueryProcessor.run_queries_approx', qreft, msg)            
+
+            # Save query results
+            self.save_query_result()
+
+            # Print results of current query
+            self.print_res_info(self.query_ref)
+    # ----------------------------------------------------------------------------------------------------------------------------------------                  
     def save_query_result(self):
         # if self.dmg.candidate_hammings is None:
         #     Hammings = []
@@ -630,18 +729,28 @@ class QueryProcessor:
             Hammings = []
         else:
             Hammings = self.H[0:self.dmg.query_k].astype(np.uint16).tolist()
-        
 
         self.query_end_time = time.perf_counter()
         query_elapsed = self.query_end_time - self.query_start_time
         print('Query Elapsed : ', query_elapsed)
     
+        # query_result = {    "batch_pos"     : str(self.batch_pos),
+        #                     "query_ref"     : str(self.query_ref),
+        #                     "V"             : self.V[0:self.dmg.query_k].astype(np.uint32).tolist(),
+        #                     "ANS"           : self.ANS[0:self.dmg.query_k].tolist(),
+        #                     "H"             : Hammings
+        #                } 
+        
+        # results_size = min(self.num_candidates,self.dmg.query_k)
+        results_size = min(self.V.shape[0],self.dmg.query_k)
         query_result = {    "batch_pos"     : str(self.batch_pos),
                             "query_ref"     : str(self.query_ref),
-                            "V"             : self.V[0:self.dmg.query_k].astype(np.uint32).tolist(),
-                            "ANS"           : self.ANS[0:self.dmg.query_k].tolist(),
-                            "H"             : Hammings
-                       }    
+                            "V"             : self.V[0:results_size].astype(np.uint32).tolist(),
+                            "ANS"           : self.ANS[0:results_size].tolist(),
+                            "H"             : Hammings[0:results_size]
+                       }         
+                
+           
         self.query_result_list.append(query_result)
         # self.query_result_list.append(json.dumps(query_result))
     # ----------------------------------------------------------------------------------------------------------------------------------------                        
@@ -673,10 +782,12 @@ class QueryProcessor:
         print()     
                 
         self.initialize()
-        if self.dmg.precision == 'exact':
-            self.run_queries_exact()
+        if      self.dmg.indextype != 'OSQ':
+                self.run_queries_faiss()
+        elif    self.dmg.precision == 'exact':
+                self.run_queries_exact()
         else:
-            self.run_queries_approx()  
+                self.run_queries_approx()  
         
         response = self.build_qp_response()
         
