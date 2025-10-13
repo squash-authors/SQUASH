@@ -199,7 +199,7 @@ class Coordinator:
         qap     = pl["qa_params"]
 
         stub = dmgp["fname"] + "_aprocs"
-        logpath = Path('SQUASH_MP/logs/' + stub)
+        logpath = Path('logs/' + stub)
         out = os.path.join(logpath, "A" + dmgp["allocator_id"] + "_" + str(os.getpid()) + ".out")
         sys.stdout = open(out, "w")
         sys.stderr = sys.stdout                      
@@ -221,7 +221,7 @@ class Coordinator:
         
         # Set up folder for MP Allocator logs
         stub = self.dmg_params["fname"] + "_aprocs"
-        logpath = Path('SQUASH_MP/logs/' + stub)
+        logpath = Path('logs/' + stub)
         if os.path.exists(logpath):
             shutil.rmtree(logpath)
         os.mkdir(logpath)             
