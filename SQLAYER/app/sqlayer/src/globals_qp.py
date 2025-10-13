@@ -27,10 +27,10 @@ class GQP(object):
 
         self.path                      = None
         self.fname                     = None
-        self.at_means                  = None
-        self.at_stdevs                 = None
-        self.attribute_cells           = None
-        self.attribute_boundary_vals   = None
+      #   self.at_means                  = None
+      #   self.at_stdevs                 = None
+      #   self.attribute_cells           = None
+      #   self.attribute_boundary_vals   = None
         self.dim_means                 = None
         self.cov_matrix                = None
         self.transform_matrix          = None
@@ -42,6 +42,33 @@ class GQP(object):
         self.sdc_lookup_upper          = None
         self.vaqdata                   = None
         self.bqdata                    = None
-        self.quant_attr_data           = None
-        self.test                      = 'Hello from g_qp_test'           
+      #   self.quant_attr_data           = None
+        self.test                      = 'Hello from g_qp_test'
+        self.indextype                 = None
+        self.faiss_index               = None           
 
+    def reset(self):
+
+        self.path                      = None
+        self.fname                     = None
+      #   self.at_means                  = None
+      #   self.at_stdevs                 = None
+      #   self.attribute_cells           = None
+      #   self.attribute_boundary_vals   = None
+        self.dim_means                 = None
+        self.cov_matrix                = None
+        self.transform_matrix          = None
+        self.tf_dim_means              = None
+        self.tf_stdevs                 = None
+        self.cells                     = None
+        self.boundary_vals             = None
+        self.sdc_lookup_lower          = None
+        self.sdc_lookup_upper          = None
+        self.vaqdata                   = None
+        self.bqdata                    = None
+      #   self.quant_attr_data           = None
+        self.test                      = 'Hello from g_qp_test'
+        self.indextype                 = None
+        self.faiss_index               = None           
+
+        print("********* Resetting GQP! *********")
