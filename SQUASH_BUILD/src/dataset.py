@@ -20,11 +20,11 @@ class DataSet(PipelineElement):
 
         #(num_dims+1, block_size/(num_dims+1)) -> (num_dims, num_vectors_per_block) if all as float32
 
-        f_handle.seek(self.ctx.num_words_per_block*block_idx*self.ctx.word_size, os.SEEK_SET) # Multiply by word_size since seek wants a byte location.
+        f_handle.seek(self.ctx.num_words_per_block*block_idx*self.ctx.datatype().itemsize, os.SEEK_SET) # Multiply by word_size since seek wants a byte location.
         if self.ctx.big_endian:
-            block = np.fromfile(file=f_handle, count=self.ctx.num_words_per_block, dtype=np.float32).byteswap(inplace=True)
+            block = np.fromfile(file=f_handle, count=self.ctx.num_words_per_block, dtype=self.ctx.datatype).byteswap(inplace=True)
         else:
-            block = np.fromfile(file=f_handle, count=self.ctx.num_words_per_block, dtype=np.float32)
+            block = np.fromfile(file=f_handle, count=self.ctx.num_words_per_block, dtype=self.ctx.datatype)
 
         block = np.reshape(block, (self.ctx.num_vectors_per_block, self.ctx.num_dimensions+1), order="C")
         block = np.delete(block, 0, 1)
@@ -37,11 +37,11 @@ class DataSet(PipelineElement):
         with open(self.full_fname, mode="rb") as f:
             
             while True:
-                f.seek(self.ctx.num_words_per_block*block_idx*self.ctx.word_size, os.SEEK_SET) # Multiply by word_size since seek wants a byte location.
+                f.seek(self.ctx.num_words_per_block*block_idx*self.ctx.datatype().itemsize, os.SEEK_SET) # Multiply by word_size since seek wants a byte location.
                 if self.ctx.big_endian:
-                    block = np.fromfile(file=f, count=self.ctx.num_words_per_block, dtype=np.float32).byteswap(inplace=True)
+                    block = np.fromfile(file=f, count=self.ctx.num_words_per_block, dtype=self.ctx.datatype).byteswap(inplace=True)
                 else:
-                    block = np.fromfile(file=f, count=self.ctx.num_words_per_block, dtype=np.float32)
+                    block = np.fromfile(file=f, count=self.ctx.num_words_per_block, dtype=self.ctx.datatype)
 
                 if block.size > 0:
                     block = np.reshape(block, (self.ctx.num_vectors_per_block, self.ctx.num_dimensions+1), order="C")
