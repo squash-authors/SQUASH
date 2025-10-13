@@ -75,6 +75,15 @@ class Coordinator:
         self.co_qa_warm_starts      = np.zeros(self.num_allocators, dtype=np.uint8)        
         self.co_metrics_fname       = os.path.join(self.dmg_params["path"], '') + self.dmg_params["fname"] + '.comet'
         self.treelauncher           = TreeLauncher(int(self.dmg_params["bfr"]), int(self.dmg_params["l_max"]),0,-1)
+        
+        # Tidy up any file channel data from previous runs (doesn't do S3 data)
+        if not self.dmg_params["use_s3"]:
+            tmp_path = os.path.join(self.dmg_params["path"], 'tmp')
+            if os.path.exists(tmp_path):
+                shutil.rmtree(tmp_path)
+                os.mkdir(tmp_path)
+            else:
+                os.mkdir(tmp_path)        
     # ----------------------------------------------------------------------------------------------------------------------------------------                        
     def build_qa_payload(self, node):
         self.dmg_params["allocator_id"] = str(node.id)
