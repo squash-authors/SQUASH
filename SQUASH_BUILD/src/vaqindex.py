@@ -17,7 +17,7 @@ class VAQIndex(PipelineElement):
     MAX_PROCESSES = 16
     # BITWISE_CONTAINER_DATATYPE = np.uint32            
     # BITWISE_CONTAINER_DATATYPE = np.uint16              # NB ALSO IN QSESSION - KEEP IN SYNC!
-    BITWISE_CONTAINER_DATATYPE = np.uint8                 # Default
+    BITWISE_CONTAINER_DATATYPE = np.uint8
 
     def __init__(self, ctx: QSession = None):
         self.ctx                  = ctx
@@ -215,6 +215,8 @@ class VAQIndex(PipelineElement):
     # ----------------------------------------------------------------------------------------------------------------------------------------
     def _lloyd(self, dim, block, boundary_vals):
 
+        lloyds_start_time = timeit.default_timer()    
+
         # Inputs: 
         # TSET -> block (num_vectors, 1)
         # B(1:CELLS(i)+1,i) -> self.boundary_vals[0:cells_for_dim+1, block_count].
@@ -258,6 +260,8 @@ class VAQIndex(PipelineElement):
             # Stopping condition check
             if ( np.abs( ((delta - delta_new) / delta) ) < VAQIndex.LLOYD_STOP ) or ( num_lloyd_iterations >= VAQIndex.MAX_LLOYD_ITERATIONS ):
                 print("Number of Lloyd's iterations: ", str(num_lloyd_iterations), flush=True)
+                lloyds_end_time = timeit.default_timer()
+                self.ctx.lloyds_elapsed += (lloyds_end_time - lloyds_start_time)
                 return dim, c
             delta = delta_new
     # ----------------------------------------------------------------------------------------------------------------------------------------
