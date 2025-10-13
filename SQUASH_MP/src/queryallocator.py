@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import shutil
 import copy
+import zlib
 
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from concurrent.futures import as_completed
@@ -170,7 +171,7 @@ class QueryAllocator:
 
         pass
     # ----------------------------------------------------------------------------------------------------------------------------------------
-    def prepare_query_batch(self, start_qid):
+    def prepare_query_batch_old(self, start_qid):
         
         # Re-initialize at start of each new batch
         # self.partition_candidates       = []    # List of np.packbits arrays
@@ -213,13 +214,10 @@ class QueryAllocator:
             else:
                 threshold_distance = np.dot(min_distance, self.dmg.centroid_factor)    
 
-            self.dmg.apply_attribute_filters(q_id)
-            # for p_no in self.dmg.partition_ids:
-                # if self.dmg.num_attributes > 0:
-                #     p_cands, self.partition_candidate_counts[p_no] = self.dmg.get_filtered_partition_vectors(p_no)
-                #     self.partition_candidates.append(p_cands)
-                # else:
-                #     self.partition_candidate_counts[p_no] = self.dmg.partition_pops[p_no]
+            if not self.dmg.bigann:
+                self.dmg.apply_attribute_filters(q_id)
+            else:
+                self.dmg.apply_label_filters(q_id)
 
             if self.dmg.candidate_count < self.dmg.query_k:
                 print('Query : ', q_id, ' -> QueryAllocator: Total matching candidates across all partitions - ', self.dmg.candidate_count, ' is less than query_k - ',self.dmg.query_k)
@@ -238,11 +236,16 @@ class QueryAllocator:
                     else:
                         print('QueryAllocator : Centroid threshold distance : ', np.round(threshold_distance,2), ' exceeded for Query ', q_id, ' after ', partitions_processed, ' partitions but target candidates ', target_candidates, ' not yet reached. Continuing..')
 
-                if self.dmg.num_attributes > 0:
+                if (self.dmg.num_attributes > 0) or (self.dmg.bigann):
                     p_cands, self.partition_candidate_counts[p_no] = self.dmg.get_filtered_partition_vectors(p_no)
-                    self.partition_candidates.append(p_cands)
+                    # self.partition_candidates.append(p_cands)
                 else:
                     self.partition_candidate_counts[p_no] = self.dmg.partition_pops[p_no]
+
+                if self.partition_candidate_counts[p_no] > 0:
+                    self.partition_candidates.append(p_cands)
+                else:
+                    continue                    
 
                 # Cater for 0 attribute scenario
                 if self.partition_candidate_counts[p_no] == self.dmg.partition_pops[p_no]:
@@ -251,19 +254,33 @@ class QueryAllocator:
                     p_candidates        = []
                 else:
                     p_num_candidates    = str(self.partition_candidate_counts[p_no])
-                    p_predicate_set     = self.dmg.predicate_sets[q_id].tolist()
+                    if not self.dmg.bigann:
+                        p_predicate_set     = self.dmg.predicate_sets[q_id].tolist()
                     # p_candidates        =  self.partition_candidates[p_no].tolist()         
-                    p_candidates        =  self.partition_candidates[partitions_processed].tolist()                      
+
+                    if self.dmg.use_compression:
+                        p_candidates        =  str(zlib.compress(self.partition_candidates[partitions_processed], level=3))
+                    else:    
+                        p_candidates        =  self.partition_candidates[partitions_processed].tolist()                      
 
                 if self.partition_candidate_counts[p_no] > 0:
-                    partition_querydata = { "partition_id"      : str(p_no),
-                                            "batch_pos"         : str(batch_pos),
-                                            "query_ref"         : str(q_id),
-                                            "num_candidates"    : p_num_candidates,
-                                            "query"             : self.dmg.Q_raw[q_id].tolist(),
-                                            "predicate_set"     : p_predicate_set,
-                                            "candidates"        : p_candidates
-                                          }
+                    if not self.dmg.bigann:
+                        partition_querydata = { "partition_id"      : str(p_no),
+                                                "batch_pos"         : str(batch_pos),
+                                                "query_ref"         : str(q_id),
+                                                "num_candidates"    : p_num_candidates,
+                                                "query"             : self.dmg.Q_raw[q_id].tolist(),
+                                                "predicate_set"     : p_predicate_set,
+                                                "candidates"        : p_candidates
+                                            }
+                    else:
+                        partition_querydata = { "partition_id"      : str(p_no),
+                                                "batch_pos"         : str(batch_pos),
+                                                "query_ref"         : str(q_id),
+                                                "num_candidates"    : p_num_candidates,
+                                                "query"             : self.dmg.Q_raw[q_id].tolist(),
+                                                "candidates"        : p_candidates
+                                            }                        
                     
                     # self.partition_queries[p_no].append(partition_querydata)
                     self.partition_queries[p_no].append(json.dumps(partition_querydata))
@@ -274,7 +291,130 @@ class QueryAllocator:
             q_id += 1
         
         return issues_needed, q_id
-    # ----------------------------------------------------------------------------------------------------------------------------------------            
+    # ----------------------------------------------------------------------------------------------------------------------------------------
+    def prepare_query_batch(self, start_qid):
+        
+        # Re-initialize at start of each new batch
+        self.partition_queries          = []
+        for p in range(self.num_partitions):
+            self.partition_queries.append([])        
+
+        stop = min(self.dmg.num_queries, (start_qid + self.dmg.query_batchsize))
+        batch_pos = -1
+        q_id = start_qid
+        issues_needed = False
+
+        while (batch_pos < self.dmg.query_batchsize - 1) and (q_id < self.dmg.num_queries):
+            batch_pos += 1
+
+            if self.dmg.caching:
+                if self.check_cache(q_id):
+                    q_id += 1
+                    # batch_pos += 1
+                    # consec_cache_hits += 1
+                    continue
+                else:
+                    # batch_pos += 1
+                    issues_needed = True
+                    if batch_pos == self.dmg.query_batchsize:
+                        continue
+            else:
+                issues_needed = True
+            
+            self.partition_candidates       = []    # List of np.packbits arrays
+            self.partition_candidate_counts = np.zeros(self.num_partitions, dtype=np.uint32)              
+            
+            self.calc_centroid_distances(query_num=q_id)
+            min_distance = np.min(self.centroid_distances)
+            if self.dmg.precision == 'exact':
+                threshold_distance = np.inf
+            else:
+                threshold_distance = np.dot(min_distance, self.dmg.centroid_factor)    
+
+            filtering = True
+            if (self.dmg.num_attributes > 0) and (not self.dmg.bigann):
+                self.dmg.apply_attribute_filters(q_id)
+            elif self.dmg.bigann:
+                self.dmg.apply_label_filters(q_id)
+            else:
+                self.dmg.candidate_count = self.dmg.num_vectors
+                filtering = False
+
+            if (self.dmg.candidate_count > 0) and (self.dmg.candidate_count < self.dmg.query_k):
+                print('Query : ', q_id, ' -> QueryAllocator: Total matching candidates across all partitions - ', self.dmg.candidate_count, ' is less than query_k - ',self.dmg.query_k)
+                print('               :  Will provide ', self.dmg.candidate_count, ' matches')
+
+            issued_candidates = 0
+            partitions_processed = 0
+            print('Query : ',q_id, ' -> Processing Partitions in order : ', np.argsort(self.centroid_distances))
+            target_candidates = min(self.dmg.query_k, self.dmg.candidate_count)
+            for p_no in np.argsort(self.centroid_distances):
+                
+                # Threshold reached and target candidates obtained - finished for this query
+                if (self.centroid_distances[p_no] > threshold_distance):
+                    if issued_candidates >= target_candidates:
+                        print('QueryAllocator : Target processing requests ', target_candidates, ' reached for Query ', q_id, ' after ', partitions_processed, ' partitions')  
+                        partitions_processed += 1  
+                        break
+                    else:
+                        print('QueryAllocator : Centroid threshold distance : ', np.round(threshold_distance,2), ' exceeded for Query ', q_id, ' after ', partitions_processed, ' partitions but target candidates ', target_candidates, ' not yet reached. Continuing..')
+
+                # Scenario 1: No filtering
+                if not filtering:
+                    self.partition_candidate_counts[p_no]   = 0
+                    p_num_candidates                        = 0
+                    p_predicate_set                         = []       
+                    p_candidates                            = []                
+                    self.partition_candidates.append(p_candidates)
+                    issued_candidates += self.dmg.partition_pops[p_no]
+
+                # Scenario 2: Filtering
+                else:
+                    p_cands, self.partition_candidate_counts[p_no] = self.dmg.get_filtered_partition_vectors(p_no)
+                    self.partition_candidates.append(p_cands)   # NB p_cands could be empty list, but appending anyway to keep list in sync with counts
+                    
+                    # Scenario 3: Filtering but zero candidates in this partition. Move to next partition.
+                    if self.partition_candidate_counts[p_no] == 0:
+                        partitions_processed += 1
+                        continue
+                    else:
+                        issued_candidates += int(self.partition_candidate_counts[p_no]) 
+
+                    # Prepare querydata            
+                    p_num_candidates    = str(self.partition_candidate_counts[p_no])
+                    if not self.dmg.bigann:
+                        p_predicate_set     = self.dmg.predicate_sets[q_id].tolist()
+                    if self.dmg.use_compression:
+                        p_candidates        =  str(zlib.compress(self.partition_candidates[partitions_processed], level=3))
+                    else:    
+                        p_candidates        =  self.partition_candidates[partitions_processed].tolist()                      
+
+                if not self.dmg.bigann:
+                    partition_querydata = { "partition_id"      : str(p_no),
+                                            "batch_pos"         : str(batch_pos),
+                                            "query_ref"         : str(q_id),
+                                            "num_candidates"    : p_num_candidates,
+                                            "query"             : self.dmg.Q_raw[q_id].tolist(),
+                                            "predicate_set"     : p_predicate_set,
+                                            "candidates"        : p_candidates
+                                        }
+                else:
+                    partition_querydata = { "partition_id"      : str(p_no),
+                                            "batch_pos"         : str(batch_pos),
+                                            "query_ref"         : str(q_id),
+                                            "num_candidates"    : p_num_candidates,
+                                            "query"             : self.dmg.Q_raw[q_id].tolist(),
+                                            "candidates"        : p_candidates
+                                        }                        
+                
+                self.partition_queries[p_no].append(json.dumps(partition_querydata))
+                partitions_processed += 1
+                
+            # Finished with this query
+            q_id += 1
+        
+        return issues_needed, q_id
+    # ----------------------------------------------------------------------------------------------------------------------------------------  
     def initialize_results(self):
         # Initialize
         self.all_V      = []
@@ -376,7 +516,8 @@ class QueryAllocator:
                 if self.dmg.check_recall:
                     hits                    = np.intersect1d(self.dmg.gt_data[q_id,1:self.dmg.query_k+1], final_V[0:self.dmg.query_k]).shape[0]
                     self.dmg.gt_total_hits  += hits
-                    recall                  = hits / self.dmg.query_k   
+                    # recall                  = hits / self.dmg.query_k   
+                    recall                  = hits / min(self.dmg.query_k, final_V.shape[0])
                     print('Query ' + str(q_id) +  ' Recall@' + str(self.dmg.query_k) + ' = ' + str(recall))
                     print()            
                     
@@ -488,7 +629,7 @@ class QueryAllocator:
         # qpp     = pl["qp_params"]
 
         stub = self.dmg.fname + "_qprocs_A" + str(self.dmg.allocator_id)
-        logpath = Path('SQUASH_MP/logs/' + stub)
+        logpath = Path('logs/' + stub)
         out = os.path.join(logpath, "B" + str(batchno) + "_P" + str(pno) + "_" + str(os.getpid()) + ".out")
         sys.stdout = open(out, "w")
         sys.stderr = sys.stdout            
@@ -508,7 +649,7 @@ class QueryAllocator:
         qap     = pl["qa_params"]
 
         stub = dmgp["fname"] + "_aprocs"
-        logpath = Path('SQUASH_MP/logs/' + stub)
+        logpath = Path('logs/' + stub)
         out = os.path.join(logpath, "A" + str(dmgp["allocator_id"]) + "_" + str(os.getpid()) + ".out")
         sys.stdout = open(out, "w")
         sys.stderr = sys.stdout      
@@ -547,7 +688,7 @@ class QueryAllocator:
             
             # Set up folder for MP logs
             stub = self.dmg.fname + "_qprocs_A" + str(self.dmg.allocator_id)
-            logpath = Path('SQUASH_MP/logs/' + stub)
+            logpath = Path('logs/' + stub)
             if os.path.exists(logpath):
                 shutil.rmtree(logpath)
             os.mkdir(logpath)             
