@@ -229,7 +229,8 @@ class AttributeSet(PipelineElement):
     # ----------------------------------------------------------------------------------------------------------------------------------------
     def _init_attribute_boundaries(self):
         
-        self.ctx.attribute_boundary_vals = np.zeros((np.max(self.ctx.attribute_cells)+1, self.ctx.num_attributes), dtype=np.float32)
+        # self.ctx.attribute_boundary_vals = np.zeros((np.max(self.ctx.attribute_cells)+1, self.ctx.num_attributes), dtype=np.float32)
+        self.ctx.attribute_boundary_vals = np.zeros((np.uint16(np.max(self.ctx.attribute_cells))+1, self.ctx.num_attributes), dtype=np.float32)
         ab_gene = self.generate_attribute_block(raw_or_std='std')
         block_count = 0
 
@@ -266,7 +267,8 @@ class AttributeSet(PipelineElement):
 
             # Loop over blocks (i.e. attributes). Each block is (num_vectors, 1)
             for block in ab_gene:
-                cells_for_attribute = self.ctx.attribute_cells[block_count]
+                # cells_for_attribute = self.ctx.attribute_cells[block_count]
+                cells_for_attribute = np.uint16(self.ctx.attribute_cells[block_count])
 
                 # If current attribute only has 1 cell (i.e. 0 bits allocated to it), then break and end.
                 # Think values in self.cells are implicitly sorted descending.
@@ -289,7 +291,8 @@ class AttributeSet(PipelineElement):
                 
                 # Loop over blocks (i.e. attributes). Each block is (num_vectors, 1)
                 for block in ab_gene:
-                    cells_for_attribute = self.ctx.attribute_cells[block_count]
+                    # cells_for_attribute = self.ctx.attribute_cells[block_count]
+                    cells_for_attribute = np.uint16(self.ctx.attribute_cells[block_count])
 
                     # If current attribute only has 1 cell (i.e. 0 bits allocated to it), then break and end.
                     # Think values in self.cells are implicitly sorted descending.
@@ -395,7 +398,10 @@ class AttributeSet(PipelineElement):
         # if pipe_state != None:
         #     print('PIPELINE ELEMENT AttributeSet : Incoming Pipe State -> ', pipe_state)
 
-        if self.ctx.mode in ('F', 'B'):
+        if self.ctx.bigann:
+            return {"removed": ("AttributeSet")}
+
+        elif self.ctx.mode in ('F', 'B'):
             self._initialize()
             self.build()
             return {"created": ("AT_MEANS", "AT_STDEVS")}      
