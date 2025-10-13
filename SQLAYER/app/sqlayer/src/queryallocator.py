@@ -10,6 +10,8 @@ from pathlib import Path
 import shutil
 import copy
 import boto3
+import botocore
+import zlib
 
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import as_completed
@@ -113,13 +115,31 @@ class QueryAllocator:
         dim_distances           = np.square(np.subtract(self.dmg.partition_centroids, self.dmg.Q[query_num]))    
         self.centroid_distances = np.sqrt(np.sum(dim_distances, axis=1))
     # ----------------------------------------------------------------------------------------------------------------------------------------                    
-    def build_qp_payload(self, part_id):
+    def build_qp_payload(self, part_id, batchno):
     
         # Change dmg params for QueryProcessor
         dmg_params                 = copy.deepcopy(self.dmg_params)
         dmg_params["path"]         = str(os.path.join(self.dmg.path, self.partitions_root, str(part_id)))
         dmg_params["mode"]         = "Q"    
         dmg_params["num_vectors"]  = str(self.dmg.partition_pops[part_id])
+        
+        # File channel requested for candidate maps, build and send file
+        if self.dmg.channel == 'F':
+            cand_fkey   = 'A' + str(self.dmg.allocator_id) + '_' + 'B' + str(batchno) + '_' + 'P' + str(part_id) + '_' + str(int(time.time()))
+            num_queries = len(self.partition_queries[part_id])
+            cells = np.ceil(self.dmg.partition_pops[part_id] // 8)
+            cand_array  = np.zeros((num_queries, cells), dtype=np.uint8)
+            
+            for qid, qdata_str in enumerate(self.partition_queries[part_id]):
+                dict = json.loads(qdata_str)
+                cand_array[qid] = np.array(dict["candidates"][0:cells], dtype=np.uint8)
+                if qid == 0:
+                    dict["candidates"] = cand_fkey   
+                    self.partition_queries[part_id][qid] = json.dumps(dict)
+                else:
+                    dict["candidates"] = ""
+                    self.partition_queries[part_id][qid] = json.dumps(dict)
+            self.dmg.send_qp_candfile(part_id, cand_fkey, cand_array)
         
         payload = { "dmg_params" : dmg_params,
                     "qp_params"  : self.partition_queries[part_id]
@@ -172,7 +192,7 @@ class QueryAllocator:
             return False
         
     # ----------------------------------------------------------------------------------------------------------------------------------------
-    def prepare_query_batch(self, start_qid):
+    def prepare_query_batch_old(self, start_qid):
         
         # Re-initialize at start of each new batch
         # self.partition_candidates       = []    # List of np.packbits arrays
@@ -255,7 +275,11 @@ class QueryAllocator:
                     p_num_candidates    = str(self.partition_candidate_counts[p_no])
                     p_predicate_set     = self.dmg.predicate_sets[q_id].tolist()
                     # p_candidates        =  self.partition_candidates[p_no].tolist()         
-                    p_candidates        =  self.partition_candidates[partitions_processed].tolist()                      
+                    # p_candidates        =  self.partition_candidates[partitions_processed].tolist()                      
+                    if self.dmg.use_compression:
+                        p_candidates        =  str(zlib.compress(self.partition_candidates[partitions_processed], level=3))
+                    else:    
+                        p_candidates        =  self.partition_candidates[partitions_processed].tolist()                      
 
                 if self.partition_candidate_counts[p_no] > 0:
                     partition_querydata = { "partition_id"      : str(p_no),
@@ -276,7 +300,130 @@ class QueryAllocator:
             q_id += 1
             
         return issues_needed, q_id
-    # ----------------------------------------------------------------------------------------------------------------------------------------            
+    # ----------------------------------------------------------------------------------------------------------------------------------------
+    def prepare_query_batch(self, start_qid):
+        
+        # Re-initialize at start of each new batch
+        self.partition_queries          = []
+        for p in range(self.num_partitions):
+            self.partition_queries.append([])        
+
+        stop = min(self.dmg.num_queries, (start_qid + self.dmg.query_batchsize))
+        batch_pos = -1
+        q_id = start_qid
+        issues_needed = False
+
+        while (batch_pos < self.dmg.query_batchsize - 1) and (q_id < self.dmg.num_queries):
+            batch_pos += 1
+
+            if self.dmg.caching:
+                if self.check_cache(q_id):
+                    q_id += 1
+                    # batch_pos += 1
+                    # consec_cache_hits += 1
+                    continue
+                else:
+                    # batch_pos += 1
+                    issues_needed = True
+                    if batch_pos == self.dmg.query_batchsize:
+                        continue
+            else:
+                issues_needed = True
+            
+            self.partition_candidates       = []    # List of np.packbits arrays
+            self.partition_candidate_counts = np.zeros(self.num_partitions, dtype=np.uint32)              
+            
+            self.calc_centroid_distances(query_num=q_id)
+            min_distance = np.min(self.centroid_distances)
+            if self.dmg.precision == 'exact':
+                threshold_distance = np.inf
+            else:
+                threshold_distance = np.dot(min_distance, self.dmg.centroid_factor)    
+
+            filtering = True
+            if (self.dmg.num_attributes > 0) and (not self.dmg.bigann):
+                self.dmg.apply_attribute_filters(q_id)
+            elif self.dmg.bigann:
+                self.dmg.apply_label_filters(q_id)
+            else:
+                self.dmg.candidate_count = self.dmg.num_vectors
+                filtering = False
+
+            if (self.dmg.candidate_count > 0) and (self.dmg.candidate_count < self.dmg.query_k):
+                print('Query : ', q_id, ' -> QueryAllocator: Total matching candidates across all partitions - ', self.dmg.candidate_count, ' is less than query_k - ',self.dmg.query_k)
+                print('               :  Will provide ', self.dmg.candidate_count, ' matches')
+
+            issued_candidates = 0
+            partitions_processed = 0
+            print('Query : ',q_id, ' -> Processing Partitions in order : ', np.argsort(self.centroid_distances))
+            target_candidates = min(self.dmg.query_k, self.dmg.candidate_count)
+            for p_no in np.argsort(self.centroid_distances):
+                
+                # Threshold reached and target candidates obtained - finished for this query
+                if (self.centroid_distances[p_no] > threshold_distance):
+                    if issued_candidates >= target_candidates:
+                        print('QueryAllocator : Target processing requests ', target_candidates, ' reached for Query ', q_id, ' after ', partitions_processed, ' partitions')  
+                        partitions_processed += 1  
+                        break
+                    else:
+                        print('QueryAllocator : Centroid threshold distance : ', np.round(threshold_distance,2), ' exceeded for Query ', q_id, ' after ', partitions_processed, ' partitions but target candidates ', target_candidates, ' not yet reached. Continuing..')
+
+                # Scenario 1: No filtering
+                if not filtering:
+                    self.partition_candidate_counts[p_no]   = 0
+                    p_num_candidates                        = 0
+                    p_predicate_set                         = []       
+                    p_candidates                            = []                
+                    self.partition_candidates.append(p_candidates)
+                    issued_candidates += self.dmg.partition_pops[p_no]
+
+                # Scenario 2: Filtering
+                else:
+                    p_cands, self.partition_candidate_counts[p_no] = self.dmg.get_filtered_partition_vectors(p_no)
+                    self.partition_candidates.append(p_cands)   # NB p_cands could be empty list, but appending anyway to keep list in sync with counts
+                    
+                    # Scenario 3: Filtering but zero candidates in this partition. Move to next partition.
+                    if self.partition_candidate_counts[p_no] == 0:
+                        partitions_processed += 1
+                        continue
+                    else:
+                        issued_candidates += int(self.partition_candidate_counts[p_no]) 
+
+                    # Prepare querydata            
+                    p_num_candidates    = str(self.partition_candidate_counts[p_no])
+                    if not self.dmg.bigann:
+                        p_predicate_set     = self.dmg.predicate_sets[q_id].tolist()
+                    if self.dmg.use_compression:
+                        p_candidates        =  str(zlib.compress(self.partition_candidates[partitions_processed], level=3))
+                    else:    
+                        p_candidates        =  self.partition_candidates[partitions_processed].tolist()                      
+
+                if not self.dmg.bigann:
+                    partition_querydata = { "partition_id"      : str(p_no),
+                                            "batch_pos"         : str(batch_pos),
+                                            "query_ref"         : str(q_id),
+                                            "num_candidates"    : p_num_candidates,
+                                            "query"             : self.dmg.Q_raw[q_id].tolist(),
+                                            "predicate_set"     : p_predicate_set,
+                                            "candidates"        : p_candidates
+                                        }
+                else:
+                    partition_querydata = { "partition_id"      : str(p_no),
+                                            "batch_pos"         : str(batch_pos),
+                                            "query_ref"         : str(q_id),
+                                            "num_candidates"    : p_num_candidates,
+                                            "query"             : self.dmg.Q_raw[q_id].tolist(),
+                                            "candidates"        : p_candidates
+                                        }                        
+                
+                self.partition_queries[p_no].append(json.dumps(partition_querydata))
+                partitions_processed += 1
+                
+            # Finished with this query
+            q_id += 1
+        
+        return issues_needed, q_id
+    # ----------------------------------------------------------------------------------------------------------------------------------------  
     def initialize_results(self):
         # Initialize
         self.all_V      = []
@@ -382,7 +529,8 @@ class QueryAllocator:
                 if self.dmg.check_recall:
                     hits                    = np.intersect1d(self.dmg.gt_data[q_id,1:self.dmg.query_k+1], final_V[0:self.dmg.query_k]).shape[0]
                     self.dmg.gt_total_hits  += hits
-                    recall                  = hits / self.dmg.query_k   
+                    # recall                  = hits / self.dmg.query_k   
+                    recall                  = hits / min(self.dmg.query_k, final_V.shape[0])
                     print('Query ' + str(q_id) +  ' Recall@' + str(self.dmg.query_k) + ' = ' + str(recall))
                     print()            
                     
@@ -484,28 +632,143 @@ class QueryAllocator:
         print(params)
         
         return json.dumps(params)
-    # ----------------------------------------------------------------------------------------------------------------------------------------    
-    # This launches an AWS Lambda QueryProcessor              
+    # # ----------------------------------------------------------------------------------------------------------------------------------------    
+    # # This launches an AWS Lambda QueryProcessor              
+    # def query_processor_old(self, payload, arn):
+       
+    #     global gqa
+    #     response = gqa.LAMBDA_CLIENT.invoke(
+    #                 FunctionName    = arn,
+    #                 InvocationType  = 'RequestResponse',
+    #                 Payload         = payload
+    #                                     )
+    #     return response
+    
+    # # # ----------------------------------------------------------------------------------------------------------------------------------------    
+    # def query_processor_connection_closed_error(self, payload, arn):
+    #     global gqa
+
+    #     max_attempts = 10
+    #     attempt = 0
+    
+    #     while attempt < max_attempts:
+    #         try:
+    #             response = gqa.LAMBDA_CLIENT.invoke(
+    #                 FunctionName=arn,
+    #                 InvocationType='RequestResponse',
+    #                 Payload=payload
+    #             )
+    #             return response
+    #         except botocore.exceptions.ConnectionClosedError as e:
+    #             attempt += 1
+    #             if attempt < max_attempts:
+    #                 print(f"ConnectionClosedError encountered (attempt {attempt}/{max_attempts}). Retrying after 1 second...")
+    #                 time.sleep(1)
+    #             else:
+    #                 print(f"ConnectionClosedError after {attempt} attempts. Raising exception.")
+    #                 raise e
+    
+    # # ----------------------------------------------------------------------------------------------------------------------------------------   
+    # This launches an AWS Lambda QueryProcessor
     def query_processor(self, payload, arn):
-       
         global gqa
-        response = gqa.LAMBDA_CLIENT.invoke(
-                    FunctionName    = arn,
-                    InvocationType  = 'RequestResponse',
-                    Payload         = payload
-                                        )
-        return response
-    # ----------------------------------------------------------------------------------------------------------------------------------------   
-    # This launches an AWS Lambda QueryAllocator              
+    
+        max_attempts = 10
+        attempt = 0
+    
+        while attempt < max_attempts:
+            try:
+                response = gqa.LAMBDA_CLIENT.invoke(
+                    FunctionName=arn,
+                    InvocationType='RequestResponse',
+                    Payload=payload
+                )
+                return response
+            except botocore.exceptions.ConnectionClosedError as e:
+                attempt += 1
+                if attempt < max_attempts:
+                    print(f"[QueryProcessor] ConnectionClosedError encountered (attempt {attempt}/{max_attempts}). Retrying after 1 second...")
+                    time.sleep(1)
+                else:
+                    print(f"[QueryProcessor] ConnectionClosedError after {attempt} attempts. Raising exception.")
+                    raise e
+            except gqa.LAMBDA_CLIENT.exceptions.EFSMountTimeoutException as e:
+                attempt += 1
+                if attempt < max_attempts:
+                    print(f"[QueryProcessor] EFSMountTimeoutException encountered (attempt {attempt}/{max_attempts}). Retrying after 1 second...")
+                    time.sleep(1)
+                else:
+                    print(f"[QueryProcessor] EFSMountTimeoutException after {attempt} attempts. Raising exception.")
+                    raise e
+    
+    # # ----------------------------------------------------------------------------------------------------------------------------------------   
+    # # This launches an AWS Lambda QueryAllocator              
+    # def query_allocator(self, payload):
+       
+    #     global gqa
+    #     response = gqa.LAMBDA_CLIENT.invoke(
+    #                 FunctionName    = gqa.QA_LAMBDA_ARN,
+    #                 InvocationType  = 'RequestResponse',
+    #                 Payload         = payload
+    #                                     )
+    #     return response
+    
+    # # ----------------------------------------------------------------------------------------------------------------------------------------        
+    # def query_allocator_connectionclosederror(self, payload):
+    #     global gqa
+    
+    #     max_attempts = 10
+    #     attempt = 0
+    
+    #     while attempt < max_attempts:
+    #         try:
+    #             response = gqa.LAMBDA_CLIENT.invoke(
+    #                 FunctionName=gqa.QA_LAMBDA_ARN,
+    #                 InvocationType='RequestResponse',
+    #                 Payload=payload
+    #             )
+    #             return response
+    #         except botocore.exceptions.ConnectionClosedError as e:
+    #             attempt += 1
+    #             if attempt < max_attempts:
+    #                 print(f"ConnectionClosedError encountered in query_allocator (attempt {attempt}/{max_attempts}). Retrying after 1 second...")
+    #                 time.sleep(1)
+    #             else:
+    #                 print(f"ConnectionClosedError in query_allocator after {attempt} attempts. Raising exception.")
+    #                 raise e
+    
+    # ----------------------------------------------------------------------------------------------------------------------------------------        
+    # This launches an AWS Lambda QueryAllocator
     def query_allocator(self, payload):
-       
         global gqa
-        response = gqa.LAMBDA_CLIENT.invoke(
-                    FunctionName    = gqa.QA_LAMBDA_ARN,
-                    InvocationType  = 'RequestResponse',
-                    Payload         = payload
-                                        )
-        return response
+    
+        max_attempts = 10
+        attempt = 0
+    
+        while attempt < max_attempts:
+            try:
+                response = gqa.LAMBDA_CLIENT.invoke(
+                    FunctionName=gqa.QA_LAMBDA_ARN,
+                    InvocationType='RequestResponse',
+                    Payload=payload
+                )
+                return response
+            except botocore.exceptions.ConnectionClosedError as e:
+                attempt += 1
+                if attempt < max_attempts:
+                    print(f"[QueryAllocator] ConnectionClosedError encountered (attempt {attempt}/{max_attempts}). Retrying after 1 second...")
+                    time.sleep(1)
+                else:
+                    print(f"[QueryAllocator] ConnectionClosedError after {attempt} attempts. Raising exception.")
+                    raise e
+            except gqa.LAMBDA_CLIENT.exceptions.EFSMountTimeoutException as e:
+                attempt += 1
+                if attempt < max_attempts:
+                    print(f"[QueryAllocator] EFSMountTimeoutException encountered (attempt {attempt}/{max_attempts}). Retrying after 1 second...")
+                    time.sleep(1)
+                else:
+                    print(f"[QueryAllocator] EFSMountTimeoutException after {attempt} attempts. Raising exception.")
+                    raise e
     # ----------------------------------------------------------------------------------------------------------------------------------------        
     def allocate(self):
         
@@ -521,6 +784,7 @@ class QueryAllocator:
                 for node in node_gene:
                     payload = self.build_qa_payload(node)
                     alloc_futures.append(alloc_executor.submit(self.query_allocator, payload=payload))
+                    # time.sleep(0.25)
             
             print()
             print("QueryAllocator ", self.dmg.allocator_id," Session Begins -> Run Mode ", self.dmg.mode)
@@ -556,9 +820,10 @@ class QueryAllocator:
                     if issues_needed:
                         for partition_id in range(self.num_partitions):
                             if self.partition_queries[partition_id] != []:
-                                payload = self.build_qp_payload(partition_id)
+                                payload = self.build_qp_payload(partition_id, batchno)
                                 print('QA - Payload Size before submit : ', len(payload))
                                 futures.append( executor.submit(self.query_processor, payload=payload, arn=gqa.QP_LAMBDA_ARNS[partition_id]) )
+                                time.sleep(0.25)
                     
                     # Prepare next query batch
                     if start_qid < self.dmg.num_queries:
@@ -568,6 +833,7 @@ class QueryAllocator:
                     self.initialize_results()
                     for future in as_completed(futures):
                         self.unload_qp_response(future.result())
+                        # time.sleep(0.25)
                         
                     # Finish processing batch
                     self.conclude_query_batch()
@@ -595,6 +861,7 @@ class QueryAllocator:
                     # self.master_qa_responses.append(alloc_future.result())
                     future_res = json.loads(alloc_future.result()["Payload"].read().decode('utf-8'))
                     self.master_qa_responses.append(future_res) 
+                    # time.sleep(0.25)
                     
             self.master_qa_responses.append(self.build_qa_response())                   
             
