@@ -84,4 +84,34 @@ class GQA(object):
         self.cov_matrix                = None
         self.transform_matrix          = None
         self.quant_attr_data           = None
+        self.lbl_counters              = None
+      #   self.lbl_vocab_sig             = None
+      #   self.lbl_ds_sig                = None
+        self.lbl_csrt_indices          = None
+        self.lbl_csrt_indptr           = None
+        
         self.test                      = 'Hello from g_qa_test'       
+        
+    def reset(self):
+        self.path                      = None
+        self.fname                     = None
+        self.partition_vectors         = None
+        self.partition_ids             = None
+        self.partition_pops            = None
+        self.partition_centroids       = None
+        self.at_means                  = None
+        self.at_stdevs                 = None
+        self.attribute_cells           = None
+        self.attribute_boundary_vals   = None
+        self.dim_means                 = None
+        self.cov_matrix                = None
+        self.transform_matrix          = None
+        self.quant_attr_data           = None
+        self.lbl_counters              = None
+      #   self.lbl_vocab_sig             = None
+      #   self.lbl_ds_sig                = None
+        self.lbl_csrt_indices          = None
+        self.lbl_csrt_indptr           = None
+
+        print("********* Resetting GQA! *********") 
+
