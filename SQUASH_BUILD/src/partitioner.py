@@ -6,6 +6,7 @@ import math
 import shutil
 import timeit
 from datetime import datetime
+from scipy.sparse import csr_matrix
 
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
@@ -14,20 +15,23 @@ class Partitioner():
     PARTITION_SIZE_VARIATION_PERC = 10       # Want pretty well balanced partitions
     MAX_UINT8 = 255
     MAX_LLOYD_ITERATIONS = 250
-    LLOYD_STOP = 0.005                         
+    LLOYD_STOP = 0.005     
+    BINARYSIG_PROBA1 = 0.1                    
     
-    def __init__(self, path, fname, mode='B', word_size=4, big_endian=False, attribute_bit_budget=None, non_uniform_bit_alloc=None, design_boundaries=None, \
-                    partitioner_blocks=None, num_vectors=None, num_dimensions=None, num_attributes=None, num_partitions=None ):
+    def __init__(self, path, fname, mode='B', word_size=4, datatype=np.float32, big_endian=False, attribute_bit_budget=None, non_uniform_bit_alloc=None, design_boundaries=None, \
+                    bigann=False, partitioner_blocks=None, num_vectors=None, num_dimensions=None, num_attributes=None, num_partitions=None ):
         
         # Parameter instance variables
         self.path                       = path
         self.fname                      = fname
         self.mode                       = mode
         self.word_size                  = word_size
+        self.datatype                   = datatype
         self.big_endian                 = big_endian
         self.attribute_bit_budget       = attribute_bit_budget
         self.non_uniform_bit_alloc      = non_uniform_bit_alloc
-        self.design_boundaries          = design_boundaries        
+        self.design_boundaries          = design_boundaries 
+        self.bigann                     = bigann       
         self.partitioner_blocks         = partitioner_blocks
         self.num_vectors                = num_vectors
         self.num_dimensions             = num_dimensions
@@ -39,7 +43,6 @@ class Partitioner():
         self.full_tf_fname              = None
         self.full_afname                = None
         self.partition_vectors          = None
-        self.labels                     = None     
         self.tf_data                    = None   
         self.ds_data                    = None   
         self.at_data                    = None
@@ -62,12 +65,27 @@ class Partitioner():
         self.total_file_words           = None
         self.num_words_per_block        = None
         self.num_vectors_per_block      = None
+        
+        # Labels processing
+        self.full_lblfname              = None 
+        self.full_sigfname              = None
+        self.labels_csr                 = None      # Labels csr built from input labels data
+        self.id_bits                    = None      # Number of bits reserved for vector ids
+        self.sig_bits                   = None      # Number of bits used for vector "signature"
+        self.ds_sig                     = None      # 1D array holding signatures for each vector (num_vectors)     
+        self.vocab_sig                  = None      # 1D array holding signatures for each label (num_labels)
+        self.id_mask                    = None      # For extracting vector IDs from ds_sig
+        self.ls_counters                = None      # 1 x 4 array for holding nrow, ncol, nnz (for csrt) and id_mask (for saving as .npz file)
+        self.csrt_indices               = None
+        self.csrt_indptr                = None
     # ----------------------------------------------------------------------------------------------------------------------------------------
     def _initialize(self):
         np.set_printoptions(suppress=True)
         self.full_fname                 = os.path.join(self.path, '') + self.fname
         self.full_tf_fname              = os.path.join(self.path, '') + self.fname + '.tf'
         self.full_afname                = os.path.join(self.path, '') + self.fname + '.af'
+        self.full_lblfname              = os.path.join(self.path, '') + self.fname + '.labels'
+        self.full_sigfname              = os.path.join(self.path, '') + self.fname + '_sig'
         self.full_tp_afname             = os.path.join(self.path, '') + self.fname + '.aftp'
         self.full_std_afname            = os.path.join(self.path, '') + self.fname + '.afstd'
         self.full_quant_std_afname      = os.path.join(self.path, '') + self.fname + '.afstdq'        
@@ -189,7 +207,8 @@ class Partitioner():
             self.attribute_cells *= levels
     #----------------------------------------------------------------------------------------------------------------------------------------
     def _init_attribute_boundaries(self):
-        self.attribute_boundary_vals = np.zeros((np.max(self.attribute_cells)+1, self.num_attributes), dtype=np.float32)
+        # self.attribute_boundary_vals = np.zeros((np.max(self.attribute_cells)+1, self.num_attributes), dtype=np.float32)
+        self.attribute_boundary_vals = np.zeros((np.uint16(np.max(self.attribute_cells))+1, self.num_attributes), dtype=np.float32)
         ab_gene = self.generate_attribute_block(raw_or_std='std')
         block_count = 0
 
@@ -226,7 +245,8 @@ class Partitioner():
             
             # Loop over blocks (i.e. attributes). Each block is (num_vectors, 1)
             for block in ab_gene:
-                cells_for_attribute = self.attribute_cells[block_count]
+                # cells_for_attribute = self.attribute_cells[block_count]
+                cells_for_attribute = np.uint16(self.attribute_cells[block_count])
 
                 # If current attribute only has 1 cell (i.e. 0 bits allocated to it), then break and end.
                 # Values in self.cells are implicitly sorted descending.
@@ -248,7 +268,8 @@ class Partitioner():
                     # print('Lloyds complete for Attribute ', item, flush=True)
                 elif seq == 1:
                     # print('Returned Boundary Values : ', item, flush=True)
-                    cells_for_attribute = self.attribute_cells[returned_attribute]
+                    # cells_for_attribute = self.attribute_cells[returned_attribute]
+                    cells_for_attribute = np.uint16(self.attribute_cells[returned_attribute])
                     self.attribute_boundary_vals[0:cells_for_attribute+1, returned_attribute] = item
     #----------------------------------------------------------------------------------------------------------------------------------------
     def _lloyd(self, dim, block, boundary_vals):
@@ -330,6 +351,79 @@ class Partitioner():
                  AT_CELLS               = self.attribute_cells,
                  AT_BVALS               = self.attribute_boundary_vals)
     #----------------------------------------------------------------------------------------------------------------------------------------
+    def _preprocess_labelset(self):
+        self._load_labels_csr()
+        self._generate_dataset_signatures()
+    #----------------------------------------------------------------------------------------------------------------------------------------    
+    def _load_labels_csr(self):
+        with open(self.full_lblfname, "rb") as f:
+            sizes = np.fromfile(f, dtype='int64', count=3)
+            nrow, ncol, nnz = sizes
+            indptr = np.fromfile(f, dtype='int64', count=nrow + 1)
+            assert nnz == indptr[-1]
+            indices = np.fromfile(f, dtype='int32', count=nnz)
+            assert np.all(indices >= 0) and np.all(indices < ncol)
+            data = np.fromfile(f, dtype='float32', count=nnz)
+            
+        self.labels_csr = csr_matrix((data, indices, indptr), shape=(len(indptr) - 1, ncol))
+    #----------------------------------------------------------------------------------------------------------------------------------------    
+    def _csr_to_bitcodes(self, csr, bitsig):
+        indptr = csr.indptr
+        indices = csr.indices
+        n = csr.shape[0]
+        bit_codes = np.zeros(n, dtype='int64')
+        for i in range(n):
+            # print(bitsig[indices[indptr[i]:indptr[i + 1]]])
+            bit_codes[i] = np.bitwise_or.reduce(bitsig[indices[indptr[i]:indptr[i + 1]]])
+        return bit_codes        # 1D matrix of int64, each entry is the OR of the bit representations of all the labels for that vector
+    #----------------------------------------------------------------------------------------------------------------------------------------        
+    def _generate_dataset_signatures(self):
+        nvec, nword = self.labels_csr.shape
+        # number of bits reserved for the vector ids
+        self.id_bits = int(np.ceil(np.log2(self.num_vectors)))
+        # number of bits for the binary signature
+        self.sig_bits = nbits = 63 - self.id_bits
+
+        # select binary signatures for the vocabulary
+        rs = np.random.RandomState(123)     # Needs to be reproducible
+        self.vocab_sig = np.packbits(rs.rand(nword, nbits) < Partitioner.BINARYSIG_PROBA1, axis=1)
+        self.vocab_sig = np.pad(self.vocab_sig, ((0, 0), (0, 8 - self.vocab_sig.shape[1]))).view("int64").ravel()
+
+        # signatures for dataset metadata csr
+        self.ds_sig = self._csr_to_bitcodes(self.labels_csr, self.vocab_sig) << self.id_bits       # The combined bit signature for each vector (1D - num vectors), shifted left to make room for vecids
+
+        # mask to keep only the ids
+        self.id_mask = (1 << self.id_bits) - 1
+    #----------------------------------------------------------------------------------------------------------------------------------------        
+    def _save_labelset(self):
+        # Save:     self.vocab_sig      1D bit signatures for each label                    (num labels)
+        #           self.ds_sig         1D bit signatures for OR'd labels on each vector    (num vectors)
+        #           self.id_mask        1D mask for extracting just vector IDs              (1 x int64)
+        # 
+        #           Also nrow, ncol, nnz, indices (int32) and indptr (int64) from transposed database signatures csr. This is (num_labels x num_vectors).Don't need data (all 1s)
+        #           Will save the single values in a 1D (4) int64 array along with id_mask
+                
+        csrt        = self.labels_csr.T.tocsr()   # Transpose operation returns a csc, not crs
+        counters    = np.array([csrt.shape[0], csrt.shape[1], csrt.nnz, self.id_mask], dtype=np.int64) 
+        
+        print("Writing preprocessed labels data to ", self.full_sigfname)
+        np.savez(self.full_sigfname, 
+                    COUNTERS    = counters,
+                    # VOCABSIG    = self.vocab_sig,
+                    # DSSIG       = self.ds_sig,
+                    INDICES     = csrt.indices,
+                    INDPTR      = csrt.indptr )
+    #----------------------------------------------------------------------------------------------------------------------------------------            
+    def _load_labelset(self):
+        fna = self.full_sigfname + '.npz'
+        print("Loading labelset data from ", fna)
+        with np.load(fna) as data:
+            self.ls_counters    = data['COUNTERS']
+            # self.vocab_sig      = data['VOCABSIG']
+            # self.ds_sig         = data['DSSIG']
+            self.csrt_indices   = data['INDICES']    
+            self.csrt_indptr    = data['INDPTR']
+    #----------------------------------------------------------------------------------------------------------------------------------------                
     def _load_tf_data(self):
         # Populate in-memory Vectors array
         total_tf_words = (self.num_vectors * self.num_dimensions)
@@ -347,9 +441,9 @@ class Partitioner():
         total_dataset_words = (self.num_vectors * (self.num_dimensions + 1))
         with open(self.full_fname, mode="rb") as f:
             if self.big_endian:
-                self.ds_data = np.fromfile(file=f, count=total_dataset_words, dtype=np.float32).byteswap(inplace=True)
+                self.ds_data = np.fromfile(file=f, count=total_dataset_words, dtype=self.datatype).byteswap(inplace=True)
             else:
-                self.ds_data = np.fromfile(file=f, count=total_dataset_words, dtype=np.float32)
+                self.ds_data = np.fromfile(file=f, count=total_dataset_words, dtype=self.datatype)
             if self.ds_data.size > 0:
                 self.ds_data = np.reshape(self.ds_data, (self.num_vectors, self.num_dimensions+1), order="C")
     # ----------------------------------------------------------------------------------------------------------------------------------------    
@@ -391,8 +485,8 @@ class Partitioner():
         
         self.clf = KMeansConstrained(
                                         n_clusters      =   self.num_partitions,
-                                        size_min        =   partition_min_size,
-                                        size_max        =   partition_max_size,
+                                        size_min        =   np.int32(partition_min_size),
+                                        size_max        =   np.int32(partition_max_size),
                                         random_state    =   0,                          # If int, seed used by the random number generator. If None, RandomState instance used by np.random
                                         init            =   'k-means++',                # selects initial cluster centers for k-mean clustering in a smart way to speed up convergence
                                         # max_iter        =   300,                        # Maximum number of iterations of the k-means algorithm for a single run.
@@ -401,10 +495,11 @@ class Partitioner():
                                         verbose         =   1,                          # Verbosity mode
                                         copy_x          =   True,                       # Ensures additional data is not changed at all (involves taking a safe copy)
                                         n_jobs          =   -1                          # -1 = Use all cpus, 1 = No parallel computing, n_jobs = -2, all CPUs but one are used, etc 
+                                        # n_jobs          = 6 
                                     )        
         
-        self.clf.fit_predict(self.tf_data)
-        # self.clf.fit(self.tf_data)
+        # self.clf.fit_predict(self.tf_data)
+        self.clf.fit(self.tf_data)
         
         self.labels                 = self.clf.labels_
         self.partition_centroids    = self.clf.cluster_centers_
@@ -435,6 +530,18 @@ class Partitioner():
                 self.at_data[inds].ravel(order='F').tofile(fa)                
                 self.partition_vectors[inds,p_id] = 1
     # ----------------------------------------------------------------------------------------------------------------------------------------
+    def _create_subsets_bigann(self):
+        for p_id in self.partition_ids:
+            
+            partpath                = os.path.join(os.path.join(self.path,'partitions'),str(p_id))
+            part_dataset_fname      = os.path.join(partpath, self.fname)
+            
+            with open(part_dataset_fname, 'wb') as fd:
+                
+                inds = np.where(self.labels == p_id)[0]
+                self.ds_data[inds].tofile(fd)
+                self.partition_vectors[inds,p_id] = 1
+    # ----------------------------------------------------------------------------------------------------------------------------------------    
     def _save_partitioner_vars(self):
         # np.savez(os.path.join(self.path, '') + self.fname + '.ptnrvars', PART_VECTORS=self.partition_vectors, 
         #                 PART_IDS=self.partition_ids, PART_POPS=self.partition_pops, PART_CENTROIDS=self.partition_centroids)
@@ -461,11 +568,11 @@ class Partitioner():
         block_idx = start_offset
         with open(self.full_fname, mode="rb") as f:
             while True:
-                f.seek(self.num_words_per_block*block_idx*self.word_size, os.SEEK_SET) 
+                f.seek(self.num_words_per_block*block_idx*self.datatype().itemsize, os.SEEK_SET) 
                 if self.big_endian:
-                    block = np.fromfile(file=f, count=self.num_words_per_block, dtype=np.float32).byteswap(inplace=True)
+                    block = np.fromfile(file=f, count=self.num_words_per_block, dtype=self.datatype).byteswap(inplace=True)
                 else:
-                    block = np.fromfile(file=f, count=self.num_words_per_block, dtype=np.float32)
+                    block = np.fromfile(file=f, count=self.num_words_per_block, dtype=self.datatype)
 
                 if block.size > 0:
                     block = np.reshape(block, (self.num_vectors_per_block, self.num_dimensions+1), order="C")
@@ -604,6 +711,50 @@ class Partitioner():
                         TRANSFORM_MATRIX   = transform_matrix)
         dummy = 0
     # ----------------------------------------------------------------------------------------------------------------------------------------        
+    def _build_qa_vars_bigann(self):
+        stub = os.path.join(self.path, '') + self.fname
+        ptnrvars_present = self._find_file_by_suffix('ptnrvars.npz')
+        
+        if ptnrvars_present:    
+            # Build QueryAllocator varset
+            ptnr_fname = stub + '.ptnrvars.npz'
+            with np.load(ptnr_fname) as data_pt:
+                partition_vectors       = data_pt['PART_VECTORS']
+                partition_ids           = data_pt['PART_IDS']
+                partition_pops          = data_pt['PART_POPS']
+                partition_centroids     = data_pt['PART_CENTROIDS']                
+            
+            labels_fname = self.full_sigfname + '.npz'
+            with np.load(labels_fname) as data_lb:
+                lbl_counters        = data_lb['COUNTERS']
+                # lbl_vocab_sig       = data_lb['VOCABSIG']
+                # lbl_ds_sig          = data_lb['DSSIG']
+                lbl_csrt_indices    = data_lb['INDICES']    
+                lbl_csrt_indptr     = data_lb['INDPTR']
+
+            ds_fname = stub + '.dsvars.npz'
+            with np.load(ds_fname) as data_ds:
+                dim_means               = data_ds['DIM_MEANS']
+                cov_matrix              = data_ds['COV_MATRIX']
+                transform_matrix        = data_ds['TRANSFORM_MATRIX']                
+
+            # Write consolidated QA data file - without quantized attribute data
+            qavars_fname = stub + '.qavars'
+            np.savez(qavars_fname, 
+                    PART_VECTORS        = partition_vectors,
+                    PART_IDS            = partition_ids,
+                    PART_POPS           = partition_pops,
+                    PART_CENTROIDS      = partition_centroids,
+                    LBL_COUNTERS        = lbl_counters,
+                    # LBL_VOCABSIG        = lbl_vocab_sig,
+                    # LBL_DSSIG           = lbl_ds_sig, 
+                    LBL_INDICES         = lbl_csrt_indices,
+                    LBL_INDPTR          = lbl_csrt_indptr,
+                    DIM_MEANS          = dim_means,
+                    COV_MATRIX         = cov_matrix,
+                    TRANSFORM_MATRIX   = transform_matrix)
+        dummy = 0
+    # ----------------------------------------------------------------------------------------------------------------------------------------            
     def process(self):
         
         partitioner_start_time = timeit.default_timer()
@@ -615,8 +766,12 @@ class Partitioner():
         if (self.mode == 'B') and (self.num_partitions > 0):
             self._initialize()
             self._recreate_partition_dirs()
-            self._preprocess_attributeset()
-            self._save_attribute_vars()            
+            if not self.bigann:
+                self._preprocess_attributeset()
+                self._save_attribute_vars()            
+            else:
+                self._preprocess_labelset()                
+                self._save_labelset()
             self._preprocess_dataset()
             self._save_dataset_vars()  
             self._build_tf()            
@@ -626,19 +781,31 @@ class Partitioner():
             self._run_kmc()
             self._unload_tf_data()
             self._load_ds_data()
-            self._load_at_data()
-            self._create_subsets()
+            if not self.bigann:
+                self._load_at_data()
+                self._create_subsets()
+            else:
+                self._create_subsets_bigann()
             self._save_partitioner_vars()
-            self._build_qa_vars()
+            if not self.bigann:            
+                self._build_qa_vars()
+            else:
+                self._build_qa_vars_bigann()                
         elif (self.mode == 'R') and (self.num_partitions > 0):
             self._initialize()
-            self._build_qa_vars()            
+            if not self.bigann:
+                self._build_qa_vars()            
+            else:
+                self._build_qa_vars_bigann()
             self._load_partitioner_vars()
         elif (self.mode == 'X') and (self.num_partitions > 0):      # One-off, to enable rebuild of ptrnr_vars and qa_vars with packed partition_vectors array
             self._initialize()
             self._load_partitioner_vars() 
             self._save_partitioner_vars()                         
-            self._build_qa_vars()            
+            if not self.bigann:
+                self._build_qa_vars()            
+            else:
+                self._build_qa_vars_bigann()                
             self._load_partitioner_vars()            
         elif self.num_partitions > 0:
             self._initialize()
