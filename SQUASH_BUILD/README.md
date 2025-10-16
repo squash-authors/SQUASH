@@ -23,11 +23,12 @@
 ## Dependencies
 The following package versions were used for SQUASH_BUILD.
 ```script
-- python==3.9
-- numpy==1.24.3
+- python==3.13.2
+- numpy==2.2.4
 - k_means_constrained==0.7.3
-- bitarray==2.5.1
-- boto3==1.34.82
+- bitarray==3.3.0
+- boto3==1.37.10
+- faiss-cpu==1.11.0
 ```
 
 ## Instructions
