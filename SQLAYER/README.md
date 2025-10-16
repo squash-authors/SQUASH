@@ -38,13 +38,13 @@ To run SQUASH using SQLAYER, you will require:
 ## Dependencies
 The following package versions were used for SQLAYER:
 ```script
-- python==3.11.9
-- numpy==2.0.0
-- boto3==1.34.148
-- botocore==1.34.148
+- python==3.13.2
+- numpy==2.2.4
+- boto3==1.37.10
 - s3transfer==0.10.2
 - setuptools==70.1.0
 - wheel==0.43.0
+- faiss-cpu==1.11.0
 ```
 
 ## Instructions - Creating Lambda Layer
