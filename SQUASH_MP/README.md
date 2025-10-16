@@ -21,10 +21,11 @@ This is the "multiprocessing" version of the SQUASH run-time (i.e. query-time) s
 ## Dependencies
 The following package versions were used for SQUASH_MP.
 ```script
-- python==3.11.9
-- boto3==1.34.82
-- numpy==2.0.0
-- bitarray==2.5.1
+- python==3.13.2
+- boto3==1.37.10
+- numpy==2.2.4
+- bitarray==3.3.0
+- faiss-cpu==1.11.0
 ```
 
 ## Instructions
@@ -38,3 +39,4 @@ To execute SQUASH_MP, update the smp_runner.py script to specify:
 **Runtime parameters** as described in SQLAYER    
 
 Then run smp_runner.
+
