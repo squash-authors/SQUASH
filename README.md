@@ -48,11 +48,12 @@ Performance       |  Cost-to-Performance Balance
 ## Dependencies
 The following package versions were used for SQUASH_BUILD.
 ```script
-- python==3.9
-- numpy==1.24.3
+- python==3.13.2
+- numpy==2.2.4
 - k_means_constrained==0.7.3
-- bitarray==2.5.1
-- boto3==1.34.82
+- bitarray==3.3.0
+- boto3==1.37.10
+- faiss-cpu==1.11.0
 ```
 
 ## Instructions
@@ -113,13 +114,13 @@ To run SQUASH using SQLAYER, you will require:
 ## Dependencies
 The following package versions were used for SQLAYER.
 ```script
-- python==3.11.9
-- numpy==2.0.0
-- boto3==1.34.148
-- botocore==1.34.148
+- python==3.13.2
+- numpy==2.2.4
+- boto3==1.37.10
 - s3transfer==0.10.2
 - setuptools==70.1.0
 - wheel==0.43.0
+- faiss-cpu==1.11.0
 ```
 
 ## Instructions - Creating Lambda Layer
@@ -240,10 +241,11 @@ This is the "multiprocessing" version of the SQUASH run-time (i.e. query-time) s
 ## Dependencies
 The following package versions were used for SQUASH_MP.
 ```script
-- python==3.11.9
-- boto3==1.34.82
-- numpy==2.0.0
-- bitarray==2.5.1
+- python==3.13.2
+- boto3==1.37.10
+- numpy==2.2.4
+- bitarray==3.3.0
+- faiss-cpu==1.11.0
 ```
 
 ## Instructions
